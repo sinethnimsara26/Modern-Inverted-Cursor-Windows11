@@ -283,3 +283,48 @@ The installer reported all force-live cursor roles as applied and `SUCCESS`. The
 ### Final usage rule
 
 After V4 succeeds, do **not** immediately go into classic Mouse Properties and re-select/apply the custom scheme. V4 has already done the direct live application.
+
+
+## 11. V4: do not reopen Mouse Properties
+
+V3 successfully force-applied the cursor with `SetSystemCursor`, but it then opened classic Mouse Properties. Re-selecting the newly installed scheme and pressing Apply/OK caused Windows to reload its normal cursor path and undo the force-live state.
+
+V4 removed the automatic Mouse Properties step. This made the custom pointer visibly work again.
+
+Preserved source:
+
+`archive/modern_inverted_installer_v4_no_reapply.rs`
+
+## 12. V5: native guardian integration
+
+Changing pointer size from `Settings > Accessibility > Mouse pointer and touch` caused Windows to rewrite/reload its Accessibility cursor configuration and replace the custom cursor again.
+
+V5 added a silent current-user guardian. It copies itself to `%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursorGuardian.exe`, starts through the current-user Run key, watches `HKCU\Software\Microsoft\Accessibility` using `RegNotifyChangeKeyValue`, waits for the Settings write burst to settle, and reapplies the chosen scheme/live system cursor handles. `--restore` removes the guardian.
+
+V5 was tested and successfully survived pointer-size changes.
+
+Preserved source:
+
+`archive/modern_inverted_installer_v5_guardian.rs`
+
+## 13. V5.1 Balanced: consistent sizing and less magnification pixelation
+
+The first guardian respected Windows' raw Accessibility cursor-size progression. That produced a large jump immediately after the smallest setting and extremely large, heavily pixelated cursors near the maximum.
+
+V5.1 keeps the guardian but maps the 15 Windows slider positions to an even 32..88 px range:
+
+```text
+32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84, 88
+```
+
+That gives a consistent +4 px step and avoids magnifying the low-bit-depth XOR/inverting assets to extreme sizes. True XOR inversion still cannot use ordinary 32-bit alpha-smoothed edges, but the reduced scaling range greatly improves the large-size appearance.
+
+Final source:
+
+`final/modern_inverted_installer_v5_1_balanced.rs`
+
+Final executable:
+
+`dist/ModernInvertedInstallerV5_1.exe`
+
+The user tested V5.1 and confirmed it worked.
