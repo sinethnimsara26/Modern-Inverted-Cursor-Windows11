@@ -1,15 +1,14 @@
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Source = Join-Path $ProjectRoot "final\modern_inverted_installer_v3_force_live.rs"
+$Source = Join-Path $ProjectRoot "final\modern_inverted_installer_v4_no_reapply.rs"
 $Dist = Join-Path $ProjectRoot "dist"
-$Exe = Join-Path $Dist "ModernInvertedInstallerV3.exe"
+$Exe = Join-Path $Dist "ModernInvertedInstallerV4.exe"
 
 if (-not (Test-Path $Source)) {
     throw "Final Rust source not found: $Source"
 }
 
-# Refresh this shell's PATH in case Rustup was installed after PowerShell was opened.
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
             [System.Environment]::GetEnvironmentVariable("Path","User")
 
@@ -25,7 +24,7 @@ rustup toolchain install stable-gnu
 
 New-Item -ItemType Directory -Path $Dist -Force | Out-Null
 
-Write-Host "Compiling final installer..."
+Write-Host "Compiling final V4 installer..."
 rustc +stable-gnu -O $Source -o $Exe
 
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $Exe)) {
@@ -33,10 +32,13 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $Exe)) {
 }
 
 $Hash = Get-FileHash $Exe -Algorithm SHA256
-"$($Hash.Hash.ToLower())  ModernInvertedInstallerV3.exe" |
+"$($Hash.Hash.ToLower())  ModernInvertedInstallerV4.exe" |
     Set-Content (Join-Path $Dist "SHA256SUMS.txt") -Encoding ascii
 
 Write-Host ""
 Write-Host "Build succeeded:" -ForegroundColor Green
 Get-Item $Exe | Format-List FullName,Length,LastWriteTime
 Write-Host "SHA-256: $($Hash.Hash.ToLower())"
+Write-Host ""
+Write-Host "Run the validated preset with:" -ForegroundColor Cyan
+Write-Host ".\dist\ModernInvertedInstallerV4.exe --preset compact"
