@@ -1,1 +1,1 @@
-60d4d2da9672420b0220a2a2cf6d1f96c206007b79aacdc03e0bc79f6a967640  ModernInvertedInstallerV3.exe
+7596ed6120026dc8a5e16afd9d8f48cf90a8622d4948382b2da21fde884577ac  ModernInvertedInstallerV4.exe
