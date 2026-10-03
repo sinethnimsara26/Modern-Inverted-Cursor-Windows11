@@ -232,3 +232,54 @@ Then choose preset:
 ```
 
 for **Compact**.
+
+
+## 11. V3 appeared to work, but Mouse Properties re-applied the broken path
+
+After the first successful V3 test, the installer automatically opened classic **Mouse Properties -> Pointers**.
+
+The custom scheme was then selected there and Apply/OK was pressed. Later, when File Explorer became unresponsive, the Busy/Wait cursor still looked like the old Windows animation.
+
+Re-reading the V3 source exposed an important sequencing problem:
+
+1. V3 wrote the custom registry scheme.
+2. V3 called `SPI_SETCURSORS`.
+3. V3 directly force-applied the live cursor handles with `SetSystemCursor`.
+4. V3 then opened Mouse Properties.
+5. Re-applying the scheme from Mouse Properties let Windows reload its normal cursor path again.
+
+That final manual re-apply could overwrite the very live cursor state that had just made V3 work.
+
+## 12. Final V4 fix: force-live, then leave it alone
+
+V4 removed the automatic launch of Mouse Properties and added an explicit warning not to immediately re-select/apply the scheme.
+
+The final sequence is:
+
+1. Download and verify all pinned v3.6.2 assets.
+2. Preserve the original cursor registry backup.
+3. Write the selected scheme to the registry.
+4. Request a normal Windows reload with `SPI_SETCURSORS`.
+5. Force-apply every live cursor role with `LoadCursorFromFileW` + `SetSystemCursor`.
+6. **Do not open Mouse Properties or trigger a second scheme application.**
+
+Final source:
+
+`final/modern_inverted_installer_v4_no_reapply.rs`
+
+Final CI-built executable:
+
+`dist/ModernInvertedInstallerV4.exe`
+
+The final test used:
+
+```powershell
+rustc +stable-gnu -O .\modern_inverted_installer_v4_no_reapply.rs -o .\ModernInvertedInstallerV4.exe
+.\ModernInvertedInstallerV4.exe --preset compact
+```
+
+The installer reported all force-live cursor roles as applied and `SUCCESS`. The user then confirmed that the **mouse pointer visibly changed**. This is the final validated implementation.
+
+### Final usage rule
+
+After V4 succeeds, do **not** immediately go into classic Mouse Properties and re-select/apply the custom scheme. V4 has already done the direct live application.
