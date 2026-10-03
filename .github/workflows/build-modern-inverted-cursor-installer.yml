@@ -24,12 +24,12 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build final Windows EXE
+      - name: Build final V4 Windows EXE
         shell: pwsh
         run: |
-          $src = "modern-inverted-cursor-installer/final/modern_inverted_installer_v3_force_live.rs"
+          $src = "modern-inverted-cursor-installer/final/modern_inverted_installer_v4_no_reapply.rs"
           $dist = "modern-inverted-cursor-installer/dist"
-          $exe = "$dist/ModernInvertedInstallerV3.exe"
+          $exe = "$dist/ModernInvertedInstallerV4.exe"
 
           New-Item -ItemType Directory -Path $dist -Force | Out-Null
           rustc -O $src -o $exe
@@ -38,36 +38,37 @@ jobs:
             throw "EXE was not created"
           }
 
+          Remove-Item "$dist/ModernInvertedInstallerV3.exe" -ErrorAction SilentlyContinue
+
           $hash = Get-FileHash $exe -Algorithm SHA256
-          "$($hash.Hash.ToLower())  ModernInvertedInstallerV3.exe" |
+          "$($hash.Hash.ToLower())  ModernInvertedInstallerV4.exe" |
             Set-Content "$dist/SHA256SUMS.txt" -Encoding ascii
 
           Get-Item $exe | Format-List FullName,Length,LastWriteTime
           Write-Host "SHA-256: $($hash.Hash.ToLower())"
 
-      - name: Upload reproducible EXE artifact
+      - name: Upload reproducible V4 EXE artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ModernInvertedInstallerV3-Windows-x64
+          name: ModernInvertedInstallerV4-Windows-x64
           path: |
-            modern-inverted-cursor-installer/dist/ModernInvertedInstallerV3.exe
+            modern-inverted-cursor-installer/dist/ModernInvertedInstallerV4.exe
             modern-inverted-cursor-installer/dist/SHA256SUMS.txt
           if-no-files-found: error
 
-      - name: Commit final compiled product back to repository
+      - name: Commit final compiled V4 product back to repository
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add modern-inverted-cursor-installer/dist/ModernInvertedInstallerV3.exe
-          git add modern-inverted-cursor-installer/dist/SHA256SUMS.txt
+          git add -A modern-inverted-cursor-installer/dist
 
           git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Compiled product is already up to date."
+            Write-Host "Compiled V4 product is already up to date."
             exit 0
           }
 
-          git commit -m "Build ModernInvertedInstallerV3.exe [skip ci]"
+          git commit -m "Build ModernInvertedInstallerV4.exe [skip ci]"
           git push
