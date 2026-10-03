@@ -797,8 +797,7 @@ fn force_live_system_cursors(preset: Preset, dir: &Path, log: &Logger) -> Result
         Preset::Compact => (
             "arrow_no_tail_smaller_v2.cur",
             "help_no_tail.cur",
-            "working_tail_detached_v3.ani",
-        ),
+            "working_tail_detached_v3.ani",        ),
     };
 
     let system_root = env::var_os("SystemRoot")
@@ -998,3 +997,191 @@ fn watch_accessibility_changes(
                 RegCloseKey(key);
             }
             return Err(format!(
+                "RegNotifyChangeKeyValue failed (status={status})."
+            ));
+        }
+
+        // SystemSettings.exe writes several cursor values in a burst. Waiting
+        // briefly lets Windows finish the transaction before we restore our
+        // custom cursor paths at the newly selected CursorBaseSize.
+        thread::sleep(Duration::from_millis(500));
+
+        log.line(format!(
+            "[guardian] Accessibility cursor change detected; reapplying {}...",
+            preset.name()
+        ));
+
+        if let Err(e) = register_and_apply(preset, install_dir, log) {
+            log.line(format!("[guardian] Reapply failed: {e}"));
+            // Keep watching. A later Settings change may succeed.
+        } else {
+            let step = current_accessibility_step();
+            log.line(format!(
+                "[guardian] Reapplied: slider {}/15 -> {}px balanced size.",
+                step,
+                balanced_cursor_size(step)
+            ));
+        }
+    }
+}
+
+fn choose_preset() -> Result<Preset, String> {
+    println!();
+    println!("Choose the cursor style:");
+    println!("  [1] Regular");
+    println!("  [2] No Tail");
+    println!("  [3] Tail Detached");
+    println!("  [4] Compact  (recommended first)");
+    println!();
+
+    loop {
+        print!("Enter 1-4: ");
+        io::stdout()
+            .flush()
+            .map_err(|e| format!("Could not flush stdout: {e}"))?;
+
+        let mut s = String::new();
+        io::stdin()
+            .read_line(&mut s)
+            .map_err(|e| format!("Could not read your choice: {e}"))?;
+
+        match s.trim() {
+            "1" => return Ok(Preset::Regular),
+            "2" => return Ok(Preset::NoTail),
+            "3" => return Ok(Preset::TailDetached),
+            "4" => return Ok(Preset::Compact),
+            _ => println!("Please enter 1, 2, 3, or 4."),
+        }
+    }
+}
+
+fn parse_preset_arg(args: &[String]) -> Result<Option<Preset>, String> {
+    for i in 0..args.len() {
+        if args[i] == "--preset" {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| "--preset requires regular|no-tail|tail-detached|compact".to_string())?;
+            return Preset::from_cli(value)
+                .map(Some)
+                .ok_or_else(|| format!("Unknown preset: {value}"));
+        }
+    }
+    Ok(None)
+}
+
+fn run() -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        return Err("This program is intended to run on Windows 10/11.".into());
+    }
+
+    #[cfg(windows)]
+    {
+        let args: Vec<String> = env::args().skip(1).collect();
+        let no_pause = args.iter().any(|a| a == "--no-pause");
+
+        let local_app_data = env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .ok_or_else(|| "LOCALAPPDATA is not defined.".to_string())?;
+
+        let root = local_app_data.join("ModernInvertedCursors");
+        let install_dir = root.join(format!("v{VERSION}"));
+        fs::create_dir_all(&install_dir)
+            .map_err(|e| format!("Could not create {}: {e}", install_dir.display()))?;
+
+        let log_path = root.join(format!("installer-{}.log", timestamp()));
+        let log = Logger::new(log_path.clone());
+        let backup_path = root.join("backup-original.reg");
+
+        log.line("============================================================");
+        log.line(" Modern Inverted Mouse Cursors v3.6.2 - Rust Installer v5.1 (balanced guardian)");
+        log.line("============================================================");
+        log.line(format!("Install folder: {}", install_dir.display()));
+        log.line(format!("Log file:       {}", log_path.display()));
+        log.line("");
+
+        if !command_exists("reg.exe") {
+            return Err("reg.exe was not found; Windows registry tools are unavailable.".into());
+        }
+
+        if args.iter().any(|a| a == "--watch") {
+            let preset = parse_preset_arg(&args)?.unwrap_or(Preset::Compact);
+            return watch_accessibility_changes(preset, &install_dir, &log);
+        }
+
+        if args.iter().any(|a| a == "--restore") {
+            uninstall_guardian(&root, &log);
+            restore_backup(&backup_path, &log)?;
+            log.line("");
+            log.line("Restore complete.");
+            if !no_pause {
+                pause();
+            }
+            return Ok(());
+        }
+
+        let preset = match parse_preset_arg(&args)? {
+            Some(p) => p,
+            None => choose_preset()?,
+        };
+
+        log.line(format!("Selected preset: {}", preset.name()));
+        log.line("");
+
+        export_backup(&backup_path, &log)?;
+
+        log.line("");
+        log.line("[download] Fetching exact public v3.6.2 cursor assets...");
+        download_all(&install_dir, &log)?;
+
+        log.line("");
+        log.line("[apply] Writing the Windows cursor scheme...");
+        register_and_apply(preset, &install_dir, &log)?;
+
+        log.line("");
+        install_guardian(&root, preset, &log)?;
+
+        log.line("");
+        log.line("SUCCESS.");
+        log.line(format!("Applied: {}", preset.name()));
+        log.line(format!("Files:   {}", install_dir.display()));
+        log.line(format!("Backup:  {}", backup_path.display()));
+        log.line("");
+        log.line("Restore later with:");
+        log.line("  ModernInvertedInstallerV5_1.exe --restore");
+        log.line("");
+        log.line("NATIVE INTEGRATION:");
+        log.line("  The per-user guardian is now running silently.");
+        log.line("  Windows' 15-position Accessibility size slider is normalized");
+        log.line("  to a balanced 32..88px range in 4px steps.");
+        log.line("  This removes the huge 32->48 first jump and prevents the");
+        log.line("  256px maximum that made the XOR cursor extremely pixelated.");
+        log.line("  Windows may briefly load its stock cursor after a slider move;");
+        log.line("  the guardian then reapplies this pack at the balanced new size.");
+        log.line("  The guardian also starts automatically when you sign in.");
+
+        if !no_pause {
+            pause();
+        }
+
+        Ok(())
+    }
+}
+
+fn main() {
+    // Prevent a double-clicked EXE from vanishing on a Rust panic.
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("\nFATAL RUST PANIC\n================");
+        eprintln!("{info}");
+        eprintln!("\nThe installer did not intentionally hide this error.");
+        pause();
+    }));
+
+    if let Err(e) = run() {
+        eprintln!("\nINSTALLER ERROR\n===============");
+        eprintln!("{e}");
+        eprintln!("\nNothing else will be attempted after this failure.");
+        pause();
+        std::process::exit(1);
+    }
+}
