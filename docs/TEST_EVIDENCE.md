@@ -21,3 +21,12 @@ Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated
 - `v1.0.2` passing run [`#43177846627`](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/actions/runs/43177846627): all 5 jobs passed (`arm64`, `win7-win10-x64`, `win7-win10-x86`, `x64`, `publish-release`).
 - Prior failure [`#43177594470`](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/actions/runs/43177594470): PowerShell positional array splat bug (`@argsList`), fixed in `398f09b`.
 - Prior failure [`#43162190599`](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/actions/runs/43162190599): `gh release create` failed without `--repo` because `publish-release` lacked `.git`, fixed in `a025f6a`.
+
+---
+
+## Batch 02 Test Evidence
+
+- `cargo test` (`1.99.0`, `x86_64-pc-windows-msvc`): **`16/16 PASSED`** (`11` lib + `1` guardian + `4` setup)
+- `cargo +1.75.0 test --target x86_64-pc-windows-msvc`: **`16/16 PASSED`**
+- `cargo +1.75.0 test --target i686-pc-windows-msvc`: **`16/16 PASSED`**
+- Verified behavior covers `BUG-01` (`test_verify_child_readiness_detects_crash_and_timeout`, `test_named_ready_event_detects_early_exit_and_timeout`), `BUG-02` (`test_validate_cursor_backup_bytes_*`, `test_perform_validated_restore_refuses_corrupt_or_missing_backup_before_touching_state`), `BUG-03` (`test_headless_detection_covers_silent_and_automated_flags`), and `BUG-04` (`test_is_guardian_image_path_enforces_install_root_and_binary_name`, `test_process_entry_32w_matches_windows_sdk_size`).

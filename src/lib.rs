@@ -222,6 +222,20 @@ struct IconInfo {
     hbm_color: *mut c_void,
 }
 
+#[repr(C)]
+pub struct ProcessEntry32W {
+    pub dw_size: u32,
+    pub cnt_usage: u32,
+    pub th32_process_id: u32,
+    pub th32_default_heap_id: usize,
+    pub th32_module_id: u32,
+    pub cnt_threads: u32,
+    pub th32_parent_process_id: u32,
+    pub pc_pri_class_base: i32,
+    pub dw_flags: u32,
+    pub sz_exe_file: [u16; 260],
+}
+
 #[link(name = "user32")]
 extern "system" {
     fn SystemParametersInfoW(
@@ -242,6 +256,7 @@ extern "system" {
     fn DestroyCursor(cursor: *mut c_void) -> i32;
     fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> *mut c_void;
     fn PostMessageW(h_wnd: *mut c_void, msg: u32, w_param: usize, l_param: isize) -> i32;
+    fn GetWindowThreadProcessId(h_wnd: *mut c_void, lpdw_process_id: *mut u32) -> u32;
     fn CreateIconIndirect(piconinfo: *const IconInfo) -> *mut c_void;
     fn GetSystemMetrics(n_index: i32) -> i32;
 }
@@ -270,14 +285,37 @@ extern "system" {
 extern "system" {
     fn GetLastError() -> u32;
     fn GetCurrentProcess() -> *mut c_void;
+    fn GetCurrentProcessId() -> u32;
     fn SetProcessWorkingSetSize(
         h_process: *mut c_void,
         dw_minimum_working_set_size: usize,
         dw_maximum_working_set_size: usize,
     ) -> i32;
     fn GetLocalTime(lp_system_time: *mut SystemTimeWin);
+    fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
     fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
+    fn OpenProcess(dw_desired_access: u32, b_inherit_handle: i32, dw_process_id: u32) -> *mut c_void;
+    fn TerminateProcess(h_process: *mut c_void, u_exit_code: u32) -> i32;
+    fn WaitForSingleObject(h_handle: *mut c_void, dw_milliseconds: u32) -> u32;
+    fn WaitForMultipleObjects(
+        n_count: u32,
+        lp_handles: *const *mut c_void,
+        b_wait_all: i32,
+        dw_milliseconds: u32,
+    ) -> u32;
+    fn CreateEventW(
+        lp_event_attributes: *mut c_void,
+        b_manual_reset: i32,
+        b_initial_state: i32,
+        lp_name: *const u16,
+    ) -> *mut c_void;
+    fn OpenEventW(dw_desired_access: u32, b_inherit_handle: i32, lp_name: *const u16) -> *mut c_void;
+    fn SetEvent(h_event: *mut c_void) -> i32;
+    pub fn CloseHandle(h_object: *mut c_void) -> i32;
+    fn CreateToolhelp32Snapshot(dw_flags: u32, th32_process_id: u32) -> *mut c_void;
+    fn Process32FirstW(h_snapshot: *mut c_void, lppe: *mut ProcessEntry32W) -> i32;
+    fn Process32NextW(h_snapshot: *mut c_void, lppe: *mut ProcessEntry32W) -> i32;
 }
 
 #[link(name = "advapi32")]
@@ -1372,66 +1410,504 @@ pub fn register_and_apply(
     Ok((step, px))
 }
 
+const MAX_BACKUP_BYTES: usize = 512 * 1024;
+
+pub fn parse_reg_file_text(bytes: &[u8]) -> Result<String, String> {
+    if bytes.is_empty() {
+        return Err("Backup file is empty (0 bytes).".into());
+    }
+    if bytes.len() > MAX_BACKUP_BYTES {
+        return Err(format!(
+            "Backup file exceeds maximum expected size ({} bytes).",
+            bytes.len()
+        ));
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let body = &bytes[2..];
+        if body.len() % 2 != 0 {
+            return Err("Backup UTF-16LE registry file has truncated trailing byte.".into());
+        }
+        let words: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16(&words)
+            .map_err(|_| "Backup file contains invalid UTF-16LE data.".into());
+    }
+    let utf8_slice = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8(utf8_slice.to_vec())
+        .map_err(|_| "Backup file is neither UTF-16LE .reg nor valid UTF-8 text.".into())
+}
+
+pub fn validate_cursor_backup_bytes(bytes: &[u8]) -> Result<(), String> {
+    let text = parse_reg_file_text(bytes)?;
+    let mut lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with(';'));
+
+    let header = lines
+        .next()
+        .ok_or_else(|| "Backup file has no Windows Registry header.".to_string())?;
+    let header_ok = header.eq_ignore_ascii_case("Windows Registry Editor Version 5.00")
+        || header.eq_ignore_ascii_case("REGEDIT4");
+    if !header_ok {
+        return Err(format!("Unexpected .reg backup header: {header}"));
+    }
+
+    let mut saw_cursors_section = false;
+    let mut saw_entry = false;
+    for line in lines {
+        if line.starts_with('[') && line.ends_with(']') {
+            let section_lower = line[1..line.len() - 1].trim().to_ascii_lowercase();
+            let valid_scope = section_lower == r"hkey_current_user\control panel\cursors"
+                || section_lower.starts_with(r"hkey_current_user\control panel\cursors\");
+            if !valid_scope {
+                return Err(format!(
+                    "Backup file contains disallowed registry section [{section_lower}]."
+                ));
+            }
+            if section_lower == r"hkey_current_user\control panel\cursors" {
+                saw_cursors_section = true;
+            }
+        } else if saw_cursors_section && line.contains('=') {
+            saw_entry = true;
+        }
+    }
+
+    if !saw_cursors_section || !saw_entry {
+        return Err("Backup file does not contain a valid Control Panel\\Cursors key.".into());
+    }
+    Ok(())
+}
+
+pub fn validate_backup_file(path: &Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Err(format!("No original cursor backup exists at:\n{}", path.display()));
+    }
+    let meta = fs::metadata(path)
+        .map_err(|e| format!("Could not inspect backup {}: {e}", path.display()))?;
+    if meta.len() > MAX_BACKUP_BYTES as u64 {
+        return Err(format!(
+            "Backup file {} is unexpectedly large ({} bytes).",
+            path.display(),
+            meta.len()
+        ));
+    }
+    let bytes = fs::read(path)
+        .map_err(|e| format!("Could not read backup {}: {e}", path.display()))?;
+    validate_cursor_backup_bytes(&bytes)
+        .map_err(|reason| format!("Cursor backup {} is invalid: {reason}", path.display()))
+}
+
 pub fn export_backup(backup: &Path, log: Option<&BoundedLogger>) -> Result<(), String> {
     if backup.exists() {
-        if let Some(l) = log {
-            l.line(format!("[backup] Keeping existing {}", backup.display()));
+        match validate_backup_file(backup) {
+            Ok(()) => {
+                if let Some(l) = log {
+                    l.line(format!("[backup] Keeping existing valid {}", backup.display()));
+                }
+                return Ok(());
+            }
+            Err(reason) => {
+                let current_arrow = reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
+                if current_arrow.to_ascii_lowercase().contains("moderninvertedcursors") {
+                    return Err(format!(
+                        "Existing backup is invalid ({reason}) and current cursors already point to Modern Inverted Cursors; refusing to overwrite backup with inverted paths."
+                    ));
+                }
+                if let Some(l) = log {
+                    l.line(format!(
+                        "[backup] Existing backup was invalid ({reason}); re-exporting pre-install cursor scheme."
+                    ));
+                }
+            }
         }
-        return Ok(());
     }
     if let Some(parent) = backup.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
     }
-    let status = Command::new("reg.exe")
+    let temp_backup = backup.with_extension("reg.tmp");
+    let _ = fs::remove_file(&temp_backup);
+    let out = Command::new("reg.exe")
         .creation_flags(CREATE_NO_WINDOW)
         .args(["export", r"HKCU\Control Panel\Cursors"])
-        .arg(backup)
+        .arg(&temp_backup)
         .arg("/y")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .output()
         .map_err(|e| format!("Could not start reg.exe for backup: {e}"))?;
-    if !status.success() {
-        return Err("Windows could not export the current cursor registry key.".into());
+    if !out.status.success() {
+        let _ = fs::remove_file(&temp_backup);
+        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(format!(
+            "Windows could not export the current cursor registry key ({detail})."
+        ));
     }
+    validate_backup_file(&temp_backup).map_err(|e| {
+        let _ = fs::remove_file(&temp_backup);
+        e
+    })?;
+    fs::rename(&temp_backup, backup).map_err(|e| {
+        let _ = fs::remove_file(&temp_backup);
+        format!("Could not finalize backup {}: {e}", backup.display())
+    })?;
     if let Some(l) = log {
-        l.line(format!("[backup] Saved original cursors to {}", backup.display()));
+        l.line(format!("[backup] Saved & verified original cursors to {}", backup.display()));
     }
     Ok(())
 }
 
 pub fn restore_backup(backup: &Path, log: Option<&BoundedLogger>) -> Result<(), String> {
-    if !backup.exists() {
-        return Err(format!("No original backup exists at:\n{}", backup.display()));
-    }
-    let status = Command::new("reg.exe")
+    validate_backup_file(backup)?;
+    let out = Command::new("reg.exe")
         .creation_flags(CREATE_NO_WINDOW)
         .args(["import"])
         .arg(backup)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .output()
         .map_err(|e| format!("Could not start reg.exe for restore: {e}"))?;
-    if !status.success() {
-        return Err("reg.exe could not import the original cursor backup.".into());
+    if !out.status.success() {
+        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(format!(
+            "reg.exe could not import original cursor backup {} ({detail}).",
+            backup.display()
+        ));
     }
-    let _ = reload_cursors();
+    if let Err(err) = reload_cursors() {
+        let arrow = reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
+        if arrow.to_ascii_lowercase().contains("moderninvertedcursors") {
+            return Err(format!("Cursor reload after restore failed: {err}"));
+        }
+    }
     if let Some(l) = log {
-        l.line("[restore] Original Windows cursor configuration restored.");
+        l.line("[restore] Original Windows cursor configuration restored and verified.");
     }
+    Ok(())
+}
+
+pub fn reset_windows_default_cursors(log: Option<&BoundedLogger>) -> Result<(), String> {
+    const STANDARD_DEFAULTS: [(&str, &str); 17] = [
+        ("Arrow", r"%SystemRoot%\cursors\aero_arrow.cur"),
+        ("Help", r"%SystemRoot%\cursors\aero_helpsel.cur"),
+        ("AppStarting", r"%SystemRoot%\cursors\aero_working.ani"),
+        ("Wait", r"%SystemRoot%\cursors\aero_busy.ani"),
+        ("Crosshair", ""),
+        ("IBeam", ""),
+        ("NWPen", r"%SystemRoot%\cursors\aero_pen.cur"),
+        ("No", r"%SystemRoot%\cursors\aero_unavail.cur"),
+        ("SizeNS", r"%SystemRoot%\cursors\aero_ns.cur"),
+        ("SizeWE", r"%SystemRoot%\cursors\aero_ew.cur"),
+        ("SizeNWSE", r"%SystemRoot%\cursors\aero_nwse.cur"),
+        ("SizeNESW", r"%SystemRoot%\cursors\aero_nesw.cur"),
+        ("SizeAll", r"%SystemRoot%\cursors\aero_move.cur"),
+        ("UpArrow", r"%SystemRoot%\cursors\aero_up.cur"),
+        ("Hand", r"%SystemRoot%\cursors\aero_link.cur"),
+        ("Pin", r"%SystemRoot%\cursors\aero_pin.cur"),
+        ("Person", r"%SystemRoot%\cursors\aero_person.cur"),
+    ];
+    reg_set_string(CURSORS_SUBKEY, None, false, "Windows Default")?;
+    for (role, val) in STANDARD_DEFAULTS {
+        reg_set_string(CURSORS_SUBKEY, Some(role), true, val)?;
+    }
+    reg_set_dword(CURSORS_SUBKEY, "Scheme Source", 2)?;
+    reload_cursors()?;
+    if let Some(l) = log {
+        l.line("[restore] Reset HKCU cursors to built-in Windows Default scheme.");
+    }
+    Ok(())
+}
+
+pub fn perform_validated_restore<FStop, FClean>(
+    backup: &Path,
+    log: Option<&BoundedLogger>,
+    stop_guardians: FStop,
+    cleanup_after_restore: FClean,
+) -> Result<(), String>
+where
+    FStop: FnOnce() -> Result<usize, String>,
+    FClean: FnOnce() -> Result<(), String>,
+{
+    // Phase 1: Verify the backup is readable and valid BEFORE stopping tray/wiping metadata.
+    validate_backup_file(backup)?;
+    // Phase 2: Stop running guardian cleanly so it does not re-apply inverted cursors during import.
+    stop_guardians()?;
+    // Phase 3: Restore original cursor registry configuration and live handles.
+    restore_backup(backup, log)?;
+    // Phase 4: Only remove startup, metadata, and files once restoration succeeded.
+    cleanup_after_restore()?;
     Ok(())
 }
 
 pub fn find_tray_window() -> *mut c_void {
     let w_cls = wide_z(TRAY_WND_CLASS);
+    // SAFETY: `w_cls` is NUL-terminated UTF-16 passed to `FindWindowW`.
     unsafe { FindWindowW(w_cls.as_ptr(), std::ptr::null()) }
+}
+
+pub fn window_process_id(hwnd: *mut c_void) -> Option<u32> {
+    if hwnd.is_null() {
+        return None;
+    }
+    let mut pid: u32 = 0;
+    // SAFETY: `pid` points to initialized stack storage for a valid/non-null `HWND`.
+    unsafe {
+        let _ = GetWindowThreadProcessId(hwnd, &mut pid);
+    }
+    if pid != 0 {
+        Some(pid)
+    } else {
+        None
+    }
+}
+
+pub fn normalize_win_path_str(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('/', "\\");
+    s.strip_prefix(r"\\?\")
+        .unwrap_or(&s)
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+pub fn is_guardian_image_path(exe_path: &Path, allowed_root: &Path) -> bool {
+    let exe_norm = normalize_win_path_str(exe_path);
+    let root_norm = normalize_win_path_str(allowed_root);
+    if root_norm.is_empty() || !exe_norm.starts_with(&(root_norm + "\\")) {
+        return false;
+    }
+    let file_name = exe_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    file_name == "moderninvertedcursorguardian.exe"
+        || file_name.starts_with("moderninvertedcursors-guardian")
+        || file_name.starts_with("moderninvertedinstallerv5")
+}
+
+pub fn process_image_path(pid: u32) -> Option<PathBuf> {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    type QueryFullImageFn =
+        unsafe extern "system" fn(*mut c_void, u32, *mut u16, *mut u32) -> i32;
+
+    // SAFETY: `kernel32.dll` is always loaded in Win32 processes; handles are closed before return.
+    unsafe {
+        let k32 = GetModuleHandleW(wide_z("kernel32.dll").as_ptr());
+        if k32.is_null() {
+            return None;
+        }
+        let proc = GetProcAddress(k32, b"QueryFullProcessImageNameW\0".as_ptr());
+        if proc.is_null() {
+            return None;
+        }
+        let query_fn: QueryFullImageFn = std::mem::transmute(proc);
+        let h_proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h_proc.is_null() {
+            return None;
+        }
+        let mut buf = vec![0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = query_fn(h_proc, 0, buf.as_mut_ptr(), &mut len);
+        CloseHandle(h_proc);
+        if ok != 0 && len > 0 {
+            Some(PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])))
+        } else {
+            None
+        }
+    }
+}
+
+pub fn find_verified_guardian_pids(allowed_root: &Path) -> Vec<u32> {
+    const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
+    let self_pid = unsafe { GetCurrentProcessId() };
+    let mut pids = Vec::new();
+    // SAFETY: `CreateToolhelp32Snapshot` handle is closed before returning; `ProcessEntry32W.dw_size` is set cleanly.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap.is_null() || snap as isize == -1 {
+            return pids;
+        }
+        let mut pe: ProcessEntry32W = std::mem::zeroed();
+        pe.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+        if Process32FirstW(snap, &mut pe) != 0 {
+            loop {
+                if pe.th32_process_id != 0 && pe.th32_process_id != self_pid {
+                    let end = pe
+                        .sz_exe_file
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(pe.sz_exe_file.len());
+                    let exe_name = String::from_utf16_lossy(&pe.sz_exe_file[..end]).to_ascii_lowercase();
+                    if exe_name.contains("moderninverted") {
+                        if let Some(img_path) = process_image_path(pe.th32_process_id) {
+                            if is_guardian_image_path(&img_path, allowed_root) {
+                                pids.push(pe.th32_process_id);
+                            }
+                        }
+                    }
+                }
+                if Process32NextW(snap, &mut pe) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+    }
+    pids
+}
+
+fn terminate_verified_pid(pid: u32, graceful_hwnd: *mut c_void, log: Option<&BoundedLogger>) -> Result<bool, String> {
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const PROCESS_TERMINATE: u32 = 0x0001;
+    const WM_CLOSE: u32 = 0x0010;
+    const WAIT_OBJECT_0: u32 = 0;
+
+    // SAFETY: Handle opened strictly for a PID already verified via `is_guardian_image_path` and closed on all paths.
+    unsafe {
+        let h_proc = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, 0, pid);
+        if h_proc.is_null() {
+            return Ok(false);
+        }
+        if !graceful_hwnd.is_null() {
+            PostMessageW(graceful_hwnd, WM_CLOSE, 0, 0);
+            if WaitForSingleObject(h_proc, 3500) == WAIT_OBJECT_0 {
+                CloseHandle(h_proc);
+                if let Some(l) = log {
+                    l.line(format!("[stop] Guardian PID {pid} exited cleanly."));
+                }
+                return Ok(true);
+            }
+        }
+        let term_ok = TerminateProcess(h_proc, 1) != 0;
+        let wait = WaitForSingleObject(h_proc, 2500);
+        CloseHandle(h_proc);
+        if wait == WAIT_OBJECT_0 {
+            if let Some(l) = log {
+                l.line(format!("[stop] Terminated verified guardian PID {pid} cleanly (graceful fallback)."));
+            }
+            return Ok(true);
+        }
+        Err(format!(
+            "Verified guardian process PID {pid} did not terminate in time (terminate_ok={term_ok}, wait={wait})."
+        ))
+    }
+}
+
+pub fn stop_targeted_guardians(allowed_root: &Path, log: Option<&BoundedLogger>) -> Result<usize, String> {
+    let mut stopped = 0usize;
+    let self_pid = unsafe { GetCurrentProcessId() };
+
+    let hwnd = find_tray_window();
+    if let Some(pid) = window_process_id(hwnd) {
+        if pid != self_pid {
+            let allowed = process_image_path(pid)
+                .map(|p| is_guardian_image_path(&p, allowed_root))
+                .unwrap_or(false);
+            if allowed && terminate_verified_pid(pid, hwnd, log)? {
+                stopped += 1;
+            }
+        }
+    }
+
+    for pid in find_verified_guardian_pids(allowed_root) {
+        if terminate_verified_pid(pid, std::ptr::null_mut(), log)? {
+            stopped += 1;
+        }
+    }
+    Ok(stopped)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReadyWaitOutcome {
+    Ready,
+    ExitedEarly,
+    TimedOut,
+    WaitError(u32),
+}
+
+pub struct NamedReadyEvent {
+    handle: *mut c_void,
+    pub name: String,
+}
+
+impl NamedReadyEvent {
+    pub fn create_unique(tag: &str) -> Result<Self, String> {
+        static SEQ: AtomicUsize = AtomicUsize::new(1);
+        let pid = unsafe { GetCurrentProcessId() };
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let name = format!("Local\\ModernInvertedReady_{tag}_{pid}_{seq}");
+        let w_name = wide_z(&name);
+        // SAFETY: Valid NUL-terminated UTF-16 event name; ownership transferred to `Self` and closed in `Drop`.
+        let handle = unsafe { CreateEventW(std::ptr::null_mut(), 1, 0, w_name.as_ptr()) };
+        if handle.is_null() {
+            return Err(format!("CreateEventW failed (err={})", unsafe { GetLastError() }));
+        }
+        Ok(Self { handle, name })
+    }
+
+    pub fn signal_by_name(name: &str) -> Result<(), String> {
+        const EVENT_MODIFY_STATE: u32 = 0x0002;
+        let w_name = wide_z(name);
+        // SAFETY: Opens existing event by name and closes handle before returning.
+        unsafe {
+            let h = OpenEventW(EVENT_MODIFY_STATE, 0, w_name.as_ptr());
+            if h.is_null() {
+                return Err(format!("OpenEventW({name}) failed (err={})", GetLastError()));
+            }
+            let ok = SetEvent(h);
+            let err = GetLastError();
+            CloseHandle(h);
+            if ok == 0 {
+                return Err(format!("SetEvent({name}) failed (err={err})"));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn wait_process_or_ready(
+        &self,
+        proc_handle: *mut c_void,
+        timeout_ms: u32,
+    ) -> ReadyWaitOutcome {
+        const WAIT_OBJECT_0: u32 = 0;
+        const WAIT_OBJECT_1: u32 = 1;
+        const WAIT_TIMEOUT: u32 = 258;
+        let handles = [self.handle, proc_handle];
+        // SAFETY: Both handles are valid synchronization handles for the duration of the wait.
+        let res = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, timeout_ms) };
+        match res {
+            WAIT_OBJECT_0 => ReadyWaitOutcome::Ready,
+            WAIT_OBJECT_1 => ReadyWaitOutcome::ExitedEarly,
+            WAIT_TIMEOUT => ReadyWaitOutcome::TimedOut,
+            other => ReadyWaitOutcome::WaitError(other),
+        }
+    }
+}
+
+impl Drop for NamedReadyEvent {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            // SAFETY: Handle created by `CreateEventW` and closed once on Drop.
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+pub fn read_log_tail(path: &Path, max_lines: usize) -> String {
+    let Ok(text) = fs::read_to_string(path) else {
+        return String::new();
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join(" | ")
 }
 
 pub fn close_existing_v6_window() {
     const WM_CLOSE: u32 = 0x0010;
     let existing = find_tray_window();
     if !existing.is_null() {
+        // SAFETY: `existing` was returned by `FindWindowW` for our tray window class.
         unsafe {
             PostMessageW(existing, WM_CLOSE, 0, 0);
         }
@@ -1442,17 +1918,6 @@ pub fn close_existing_v6_window() {
             }
         }
     }
-}
-
-pub fn stop_any_running_guardian() {
-    close_existing_v6_window();
-    let _ = Command::new("taskkill.exe")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args(["/IM", GUARDIAN_EXE_NAME, "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    thread::sleep(Duration::from_millis(180));
 }
 
 pub fn write_guardian_binary(guardian_exe: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -1832,5 +2297,109 @@ mod tests {
         );
         assert_eq!(parse_https_url("http://example.com/a"), None);
         assert_eq!(parse_https_url("https://example.com"), None);
+    }
+
+    #[test]
+    fn test_process_entry_32w_matches_windows_sdk_size() {
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(std::mem::size_of::<ProcessEntry32W>(), 568);
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(std::mem::size_of::<ProcessEntry32W>(), 556);
+    }
+
+    #[test]
+    fn test_validate_cursor_backup_bytes_accepts_utf16le_and_utf8_and_rejects_corrupt_or_out_of_scope() {
+        let utf8_ok = b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Control Panel\\Cursors]\r\n\"Arrow\"=\"C:\\\\Windows\\\\Cursors\\\\aero_arrow.cur\"\r\n";
+        assert!(validate_cursor_backup_bytes(utf8_ok).is_ok());
+
+        let utf16_body: Vec<u16> = "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Control Panel\\Cursors]\r\n\"Arrow\"=\"%SystemRoot%\\\\cursors\\\\aero_arrow.cur\"\r\n"
+            .encode_utf16()
+            .collect();
+        let mut utf16_bytes = vec![0xFFu8, 0xFEu8];
+        for w in utf16_body {
+            utf16_bytes.extend_from_slice(&w.to_le_bytes());
+        }
+        assert!(validate_cursor_backup_bytes(&utf16_bytes).is_ok());
+
+        assert!(validate_cursor_backup_bytes(b"").is_err());
+        assert!(validate_cursor_backup_bytes(b"corrupt garbage").is_err());
+        let unrelated_key = b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Control Panel\\Cursors]\r\n\"Arrow\"=\"ok\"\r\n[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run]\r\n\"Evil\"=\"calc.exe\"\r\n";
+        assert!(validate_cursor_backup_bytes(unrelated_key).is_err());
+    }
+
+    #[test]
+    fn test_perform_validated_restore_refuses_corrupt_or_missing_backup_before_touching_state() {
+        let tmp = env::temp_dir().join("mic-test-safe-restore");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let bad_backup = tmp.join("backup-original.reg");
+        fs::write(&bad_backup, b"NOT A REG FILE").unwrap();
+
+        let mut stopped = false;
+        let mut cleaned = false;
+        let res = perform_validated_restore(
+            &bad_backup,
+            None,
+            || {
+                stopped = true;
+                Ok(1)
+            },
+            || {
+                cleaned = true;
+                Ok(())
+            },
+        );
+        assert!(res.is_err());
+        assert!(!stopped, "guardian must not be stopped when backup is corrupt");
+        assert!(!cleaned, "metadata/files must not be removed when backup is corrupt");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_is_guardian_image_path_enforces_install_root_and_binary_name() {
+        let root = Path::new(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors");
+        assert!(is_guardian_image_path(
+            Path::new(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\ModernInvertedCursorGuardian.exe"),
+            root
+        ));
+        assert!(is_guardian_image_path(
+            Path::new(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\ModernInvertedCursors-Guardian.exe"),
+            root
+        ));
+        assert!(!is_guardian_image_path(
+            Path::new(r"C:\Temp\OtherApp\ModernInvertedCursorGuardian.exe"),
+            root
+        ));
+        assert!(!is_guardian_image_path(
+            Path::new(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\notepad.exe"),
+            root
+        ));
+    }
+
+    #[test]
+    fn test_named_ready_event_detects_early_exit_and_timeout() {
+        use std::os::windows::io::AsRawHandle;
+
+        let ev_early = NamedReadyEvent::create_unique("unit_early").unwrap();
+        let mut cmd_early = Command::new("cmd.exe")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["/C", "exit /B 7"])
+            .spawn()
+            .unwrap();
+        let outcome = ev_early.wait_process_or_ready(cmd_early.as_raw_handle() as *mut c_void, 5000);
+        let _ = cmd_early.wait();
+        assert_eq!(outcome, ReadyWaitOutcome::ExitedEarly);
+
+        let ev_timeout = NamedReadyEvent::create_unique("unit_timeout").unwrap();
+        let mut cmd_hang = Command::new("cmd.exe")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["/C", "ping -n 4 127.0.0.1 >nul"])
+            .spawn()
+            .unwrap();
+        let t_out = ev_timeout.wait_process_or_ready(cmd_hang.as_raw_handle() as *mut c_void, 120);
+        let _ = cmd_hang.kill();
+        let _ = cmd_hang.wait();
+        assert_eq!(t_out, ReadyWaitOutcome::TimedOut);
     }
 }

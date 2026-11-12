@@ -3,11 +3,12 @@
 use modern_inverted_cursor::{
     app_paths, app_paths_for_root, balanced_cursor_size, current_accessibility_step,
     draw_cursor_glyph, export_backup, find_tray_window, load_saved_preset, parse_preset_arg,
-    prepare_assets_parallel, reg_delete_value, register_and_apply, register_uninstall_entry,
-    restore_backup, save_preset, set_startup_enabled, stop_any_running_guardian,
-    unregister_uninstall_entry, wide_z, write_guardian_binary, BoundedLogger, Preset,
-    ACCESSIBILITY_STEPS, APP_VERSION, CONFIG_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE,
-    PACK_VERSION, RUN_SUBKEY,
+    perform_validated_restore, prepare_assets_parallel, read_log_tail, reg_delete_value,
+    reg_get_string, reg_set_string, register_uninstall_entry, reset_windows_default_cursors,
+    save_preset, set_startup_enabled, stop_targeted_guardians, unregister_uninstall_entry,
+    wide_z, window_process_id, write_guardian_binary, BoundedLogger, NamedReadyEvent, Preset,
+    ReadyWaitOutcome, ACCESSIBILITY_STEPS, APP_VERSION, CONFIG_SUBKEY, GUARDIAN_EXE_NAME,
+    GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY, UNINSTALL_SUBKEY,
 };
 
 use std::{
@@ -15,11 +16,12 @@ use std::{
     ffi::c_void,
     fs,
     io::Write,
+    os::windows::io::AsRawHandle,
     path::{Path, PathBuf},
+    process::{Child, Command},
     ptr::{null, null_mut},
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
 };
 
 const GUARDIAN_EXE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_guardian.exe"));
@@ -1761,6 +1763,136 @@ fn push_worker_update(hwnd_raw: usize, shared: &Arc<Mutex<WorkerUpdate>>, u: Wor
     }
 }
 
+fn verify_child_readiness(
+    mut child: Child,
+    ev: &NamedReadyEvent,
+    timeout_ms: u32,
+    log_path: &Path,
+) -> Result<Child, String> {
+    let proc_handle = child.as_raw_handle() as *mut c_void;
+    match ev.wait_process_or_ready(proc_handle, timeout_ms) {
+        ReadyWaitOutcome::Ready => {
+            if let Ok(Some(status)) = child.try_wait() {
+                let tail = read_log_tail(log_path, 4);
+                return Err(format!(
+                    "Guardian exited right after signaling ready ({status}). Log: {tail}"
+                ));
+            }
+            Ok(child)
+        }
+        ReadyWaitOutcome::ExitedEarly => {
+            let status = child.wait().ok();
+            let code_desc = status
+                .and_then(|s| s.code())
+                .map(|c| format!("exit code {c}"))
+                .unwrap_or_else(|| "unknown exit status".into());
+            let tail = read_log_tail(log_path, 4);
+            let suffix = if tail.is_empty() {
+                String::new()
+            } else {
+                format!(" Recent log: {tail}")
+            };
+            Err(format!(
+                "Guardian process terminated prematurely ({code_desc}) before cursor initialization.{suffix}"
+            ))
+        }
+        ReadyWaitOutcome::TimedOut => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let tail = read_log_tail(log_path, 4);
+            Err(format!(
+                "Guardian did not confirm readiness within {timeout_ms}ms.{}{tail}",
+                if tail.is_empty() { "" } else { " Recent log: " }
+            ))
+        }
+        ReadyWaitOutcome::WaitError(code) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(format!("WaitForMultipleObjects failed while starting guardian (code={code})."))
+        }
+    }
+}
+
+fn launch_and_verify_guardian(
+    root: &Path,
+    guardian_exe: &Path,
+    preset: Preset,
+    timeout_ms: u32,
+) -> Result<(), String> {
+    let ev = NamedReadyEvent::create_unique("setup")?;
+    let child = Command::new(guardian_exe)
+        .args(["--tray", "--preset", preset.cli_name(), "--ready-event", &ev.name])
+        .spawn()
+        .map_err(|e| format!("Could not launch {}: {e}", guardian_exe.display()))?;
+
+    let child = verify_child_readiness(child, &ev, timeout_ms, &root.join("guardian.log"))?;
+    let expected_pid = child.id();
+
+    let tray_hwnd = find_tray_window();
+    let tray_pid = window_process_id(tray_hwnd);
+    if tray_pid != Some(expected_pid) {
+        return Err(format!(
+            "Guardian readiness event fired, but tray window verification failed (expected pid={expected_pid}, found={tray_pid:?})."
+        ));
+    }
+
+    let runtime_ver = reg_get_string(CONFIG_SUBKEY, Some("RuntimeVersion"));
+    if runtime_ver.as_deref() != Some(APP_VERSION) {
+        return Err(format!(
+            "Guardian version mismatch after startup (expected {APP_VERSION}, got {:?}).",
+            runtime_ver
+        ));
+    }
+    Ok(())
+}
+
+struct InstallSnapshot {
+    prev_run_cmd: Option<String>,
+    prev_preset: Option<String>,
+    had_uninstall: bool,
+    prev_guardian: Option<Vec<u8>>,
+}
+
+impl InstallSnapshot {
+    fn capture(guardian_exe: &Path) -> Self {
+        Self {
+            prev_run_cmd: reg_get_string(RUN_SUBKEY, Some(GUARDIAN_RUN_VALUE)),
+            prev_preset: reg_get_string(CONFIG_SUBKEY, Some("Preset")),
+            had_uninstall: reg_get_string(UNINSTALL_SUBKEY, Some("UninstallString")).is_some(),
+            prev_guardian: fs::read(guardian_exe).ok(),
+        }
+    }
+
+    fn rollback(&self, root: &Path, guardian_exe: &Path, backup_path: &Path, log: &BoundedLogger) {
+        log.line("[rollback] Reverting install state after guardian verification failure...");
+        let _ = stop_targeted_guardians(root, Some(log));
+        match self.prev_run_cmd.as_deref() {
+            Some(cmd) => {
+                let _ = reg_set_string(RUN_SUBKEY, Some(GUARDIAN_RUN_VALUE), false, cmd);
+            }
+            None => reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE),
+        }
+        match self.prev_preset.as_deref() {
+            Some(p) => {
+                let _ = reg_set_string(CONFIG_SUBKEY, Some("Preset"), false, p);
+            }
+            None => reg_delete_value(CONFIG_SUBKEY, "Preset"),
+        }
+        if !self.had_uninstall {
+            unregister_uninstall_entry();
+        }
+        match self.prev_guardian.as_deref() {
+            Some(bytes) => {
+                let _ = write_guardian_binary(guardian_exe, bytes);
+            }
+            None => {
+                let _ = fs::remove_file(guardian_exe);
+                let _ = modern_inverted_cursor::restore_backup(backup_path, Some(log));
+            }
+        }
+    }
+}
+
 fn execute_install_pipeline(
     root: &Path,
     install_dir: &Path,
@@ -1812,51 +1944,54 @@ fn execute_install_pipeline(
 
     report(0.76, 2, "Installing ultra-lightweight tray guardian...".into());
     let guardian_exe = root.join(GUARDIAN_EXE_NAME);
-    if !sandbox_only {
-        stop_any_running_guardian();
-    }
-    write_guardian_binary(&guardian_exe, GUARDIAN_EXE_BYTES)?;
-
-    if !sandbox_only {
-        save_preset(preset)?;
-        set_startup_enabled(&guardian_exe, startup)?;
-        if register_uninstall {
-            register_uninstall_entry(root, &guardian_exe)?;
-        } else {
-            unregister_uninstall_entry();
-        }
-    }
-
-    report(
-        0.90,
-        3,
-        "Applying balanced cursors & starting tray guardian...".into(),
-    );
-    let (step, px) = if sandbox_only {
-        let st = current_accessibility_step();
-        (st, balanced_cursor_size(st))
+    let snapshot = if !sandbox_only {
+        let s = InstallSnapshot::capture(&guardian_exe);
+        stop_targeted_guardians(root, Some(&log))?;
+        Some(s)
     } else {
-        std::process::Command::new(&guardian_exe)
-            .args(["--tray", "--preset", preset.cli_name()])
-            .spawn()
-            .map_err(|e| format!("Could not launch tray guardian: {e}"))?;
-
-        for _ in 0..40 {
-            thread::sleep(Duration::from_millis(50));
-            if !find_tray_window().is_null() {
-                break;
-            }
-        }
-        let st = current_accessibility_step();
-        (st, balanced_cursor_size(st))
+        None
     };
 
+    if let Err(err) = write_guardian_binary(&guardian_exe, GUARDIAN_EXE_BYTES) {
+        if let Some(ref s) = snapshot {
+            s.rollback(root, &guardian_exe, backup_path, &log);
+        }
+        return Err(err);
+    }
+
+    if !sandbox_only {
+        if let Err(err) = (|| -> Result<(), String> {
+            save_preset(preset)?;
+            set_startup_enabled(&guardian_exe, startup)?;
+            if register_uninstall {
+                register_uninstall_entry(root, &guardian_exe)?;
+            } else {
+                unregister_uninstall_entry();
+            }
+            report(
+                0.90,
+                3,
+                "Applying balanced cursors & verifying tray guardian startup...".into(),
+            );
+            launch_and_verify_guardian(root, &guardian_exe, preset, 10_000)?;
+            Ok(())
+        })() {
+            if let Some(ref s) = snapshot {
+                s.rollback(root, &guardian_exe, backup_path, &log);
+            }
+            return Err(err);
+        }
+    }
+
+    let st = current_accessibility_step();
+    let px = balanced_cursor_size(st);
+
     log.line(format!(
-        "Setup v{APP_VERSION} installed {} ({}px, sandbox={sandbox_only})",
+        "Setup v{APP_VERSION} installed & verified {} ({}px, sandbox={sandbox_only})",
         preset.short_name(),
         px
     ));
-    Ok((step, px))
+    Ok((st, px))
 }
 
 fn start_install_worker(state: &mut GuiState, is_restore: bool) {
@@ -1896,7 +2031,7 @@ fn start_install_worker(state: &mut GuiState, is_restore: bool) {
                         WorkerUpdate {
                             pct: 0.25,
                             stage: 0,
-                            status: "Stopping background tray guardian...".into(),
+                            status: "Validating original cursor backup...".into(),
                             finished: false,
                             is_restore: true,
                             error: None,
@@ -1905,45 +2040,54 @@ fn start_install_worker(state: &mut GuiState, is_restore: bool) {
                             install_root: root.clone(),
                         },
                     );
-                    stop_any_running_guardian();
-                    push_worker_update(
-                        hwnd_raw,
-                        &shared,
-                        WorkerUpdate {
-                            pct: 0.55,
-                            stage: 1,
-                            status: "Cleaning startup & Installed Apps entries...".into(),
-                            finished: false,
-                            is_restore: true,
-                            error: None,
-                            applied_step: 1,
-                            applied_px: 32,
-                            install_root: root.clone(),
+                    perform_validated_restore(
+                        &backup_path,
+                        Some(&log),
+                        || {
+                            push_worker_update(
+                                hwnd_raw,
+                                &shared,
+                                WorkerUpdate {
+                                    pct: 0.55,
+                                    stage: 1,
+                                    status: "Stopping tray guardian & restoring backup...".into(),
+                                    finished: false,
+                                    is_restore: true,
+                                    error: None,
+                                    applied_step: 1,
+                                    applied_px: 32,
+                                    install_root: root.clone(),
+                                },
+                            );
+                            stop_targeted_guardians(&root, Some(&log))
                         },
-                    );
-                    reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-                    reg_delete_value(CONFIG_SUBKEY, "Preset");
-                    unregister_uninstall_entry();
-                    let gexe = root.join(GUARDIAN_EXE_NAME);
-                    if gexe.exists() {
-                        let _ = fs::remove_file(&gexe);
-                    }
-                    push_worker_update(
-                        hwnd_raw,
-                        &shared,
-                        WorkerUpdate {
-                            pct: 0.85,
-                            stage: 2,
-                            status: "Restoring original Windows cursor scheme...".into(),
-                            finished: false,
-                            is_restore: true,
-                            error: None,
-                            applied_step: 1,
-                            applied_px: 32,
-                            install_root: root.clone(),
+                        || {
+                            push_worker_update(
+                                hwnd_raw,
+                                &shared,
+                                WorkerUpdate {
+                                    pct: 0.85,
+                                    stage: 2,
+                                    status: "Cleaning startup & Installed Apps entries...".into(),
+                                    finished: false,
+                                    is_restore: true,
+                                    error: None,
+                                    applied_step: 1,
+                                    applied_px: 32,
+                                    install_root: root.clone(),
+                                },
+                            );
+                            reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
+                            reg_delete_value(CONFIG_SUBKEY, "Preset");
+                            unregister_uninstall_entry();
+                            let gexe = root.join(GUARDIAN_EXE_NAME);
+                            if gexe.exists() {
+                                let _ = fs::remove_file(&gexe);
+                            }
+                            Ok(())
                         },
-                    );
-                    restore_backup(&backup_path, Some(&log)).map(|()| (root, 1u32, 32u32))
+                    )
+                    .map(|()| (root, 1u32, 32u32))
                 } else {
                     execute_install_pipeline(
                         &root,
@@ -2483,15 +2627,32 @@ fn run() -> Result<(), String> {
     if args.iter().any(|a| a == "--restore") {
         let (root, _, backup_path) = app_paths()?;
         let log = BoundedLogger::new(root.join("guardian.log"), false);
-        stop_any_running_guardian();
+        return perform_validated_restore(
+            &backup_path,
+            Some(&log),
+            || stop_targeted_guardians(&root, Some(&log)),
+            || {
+                reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
+                reg_delete_value(CONFIG_SUBKEY, "Preset");
+                unregister_uninstall_entry();
+                let gexe = root.join(GUARDIAN_EXE_NAME);
+                if gexe.exists() {
+                    let _ = fs::remove_file(&gexe);
+                }
+                Ok(())
+            },
+        );
+    }
+
+    if args.iter().any(|a| a == "--restore-system-defaults") {
+        let (root, _, _) = app_paths()?;
+        let log = BoundedLogger::new(root.join("guardian.log"), false);
+        stop_targeted_guardians(&root, Some(&log))?;
+        reset_windows_default_cursors(Some(&log))?;
         reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
         reg_delete_value(CONFIG_SUBKEY, "Preset");
         unregister_uninstall_entry();
-        let gexe = root.join(GUARDIAN_EXE_NAME);
-        if gexe.exists() {
-            let _ = fs::remove_file(&gexe);
-        }
-        return restore_backup(&backup_path, Some(&log));
+        return Ok(());
     }
 
     if args.iter().any(|a| a == "--silent") {
@@ -2509,7 +2670,6 @@ fn run() -> Result<(), String> {
             0,
             None,
         )?;
-        let _ = register_and_apply(preset, &install_dir, None);
         return Ok(());
     }
 
@@ -2540,12 +2700,33 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+fn is_headless_invocation(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        a == "--silent"
+            || a == "--restore"
+            || a == "--restore-system-defaults"
+            || a == "--sandbox"
+            || a.starts_with("--sandbox=")
+            || a == "--smoke-ui"
+            || a.starts_with("--smoke-ui=")
+    })
+}
+
 fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let headless = is_headless_invocation(&args);
     if let Err(err) = run() {
-        let title = wide_z("Modern Inverted Cursors Setup Error");
-        let body = wide_z(&err);
-        unsafe {
-            MessageBoxW(null_mut(), body.as_ptr(), title.as_ptr(), 0x0001_0010);
+        eprintln!("{err}");
+        if let Ok((root, _, _)) = app_paths() {
+            let log = BoundedLogger::new(root.join("setup-error.log"), false);
+            log.line(format!("[setup-error] {err}"));
+        }
+        if !headless {
+            let title = wide_z("Modern Inverted Cursors Setup Error");
+            let body = wide_z(&err);
+            unsafe {
+                MessageBoxW(null_mut(), body.as_ptr(), title.as_ptr(), 0x0001_0010);
+            }
         }
         std::process::exit(1);
     }
@@ -2571,6 +2752,41 @@ mod tests {
             assert_eq!(std::mem::size_of::<PaintStruct>(), 64);
             assert_eq!(std::mem::size_of::<BitmapInfoHeader>(), 40);
         }
+    }
+
+    #[test]
+    fn test_verify_child_readiness_detects_crash_and_timeout() {
+        use std::os::windows::process::CommandExt;
+
+        let ev_crash = NamedReadyEvent::create_unique("setup_crash").unwrap();
+        let child_crash = Command::new("cmd.exe")
+            .creation_flags(modern_inverted_cursor::CREATE_NO_WINDOW)
+            .args(["/C", "exit /B 13"])
+            .spawn()
+            .unwrap();
+        let tmp_log = env::temp_dir().join("mic-test-readiness.log");
+        let _ = fs::write(&tmp_log, "line1\n[error] fake crash\n");
+        let err = verify_child_readiness(child_crash, &ev_crash, 5000, &tmp_log).unwrap_err();
+        assert!(err.contains("exit code 13"));
+        assert!(err.contains("fake crash"));
+
+        let ev_hang = NamedReadyEvent::create_unique("setup_hang").unwrap();
+        let child_hang = Command::new("cmd.exe")
+            .creation_flags(modern_inverted_cursor::CREATE_NO_WINDOW)
+            .args(["/C", "ping -n 4 127.0.0.1 >nul"])
+            .spawn()
+            .unwrap();
+        let err_timeout = verify_child_readiness(child_hang, &ev_hang, 120, &tmp_log).unwrap_err();
+        assert!(err_timeout.contains("did not confirm readiness"));
+        let _ = fs::remove_file(&tmp_log);
+    }
+
+    #[test]
+    fn test_headless_detection_covers_silent_and_automated_flags() {
+        assert!(is_headless_invocation(&["--silent".into(), "--preset".into(), "compact".into()]));
+        assert!(is_headless_invocation(&["--sandbox=C:\\temp".into()]));
+        assert!(is_headless_invocation(&["--restore".into()]));
+        assert!(!is_headless_invocation(&[]));
     }
 
     #[test]

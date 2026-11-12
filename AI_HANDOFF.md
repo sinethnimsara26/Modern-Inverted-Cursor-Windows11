@@ -11,9 +11,9 @@
 
 | Batch | Scope | Status | Commit SHA |
 | :--- | :--- | :--- | :--- |
-| **Batch 01** | Baseline audit, research, benchmarks & docs scaffolding | **IN PROGRESS (Writing docs + committing)** | *(pending commit)* |
-| **Batch 02** | Critical installation readiness, safe restore/uninstall, silent error propagation & targeted guardian IPC | **NEXT** | — |
-| **Batch 03** | Clean Setup / Guardian separation, module refactor, migration & `ModernInvertedCursors-*` naming | **PENDING** | — |
+| **Batch 01** | Baseline audit, research, benchmarks & docs scaffolding | **DONE** | `fa421bb` |
+| **Batch 02** | Critical installation readiness, safe restore/uninstall, silent error propagation & targeted guardian IPC | **DONE** | *(pending commit)* |
+| **Batch 03** | Clean Setup / Guardian separation, module refactor, migration & `ModernInvertedCursors-*` naming | **IN PROGRESS** | — |
 | **Batch 04** | Security, `build.rs` fail-closed gate, WinHTTP timeouts/size-caps/session reuse, FFI & atomic apply fixes | **PENDING** | — |
 | **Batch 05** | Guardian memory, handle, GDI & CPU wakeup optimization | **PENDING** | — |
 | **Batch 06** | Setup UI dirty-region / static-surface caching, timer stop-when-idle & DPI/keyboard accessibility | **PENDING** | — |

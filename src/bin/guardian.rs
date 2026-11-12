@@ -1,14 +1,14 @@
 #![windows_subsystem = "windows"]
 
 use modern_inverted_cursor::{
-    app_paths, balanced_cursor_size, close_existing_v6_window, create_split_cursor_hicon,
-    current_accessibility_step, ensure_all_assets, is_startup_enabled, load_saved_preset,
-    parse_preset_arg, reg_delete_value, reg_get_string, reg_open_notify, register_and_apply,
-    restore_backup, save_preset, schedule_self_delete, set_startup_enabled, trim_working_set,
-    unregister_uninstall_entry, wide_z, BoundedLogger, Preset, RegCloseKey,
-    RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION,
-    CONFIG_SUBKEY, CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
-    TRAY_WND_CLASS,
+    app_paths, balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step,
+    ensure_all_assets, is_startup_enabled, load_saved_preset, parse_preset_arg,
+    perform_validated_restore, reg_delete_value, reg_get_string, reg_open_notify, reg_set_dword,
+    reg_set_string, save_preset, schedule_self_delete, set_startup_enabled,
+    stop_targeted_guardians, trim_working_set, unregister_uninstall_entry, wide_z,
+    BoundedLogger, NamedReadyEvent, Preset, RegCloseKey, RegNotifyChangeKeyValue,
+    ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION, CONFIG_SUBKEY, CURSORS_SUBKEY,
+    GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY, TRAY_WND_CLASS,
 };
 
 use std::{
@@ -393,19 +393,21 @@ impl AppState {
         }
     }
 
-    fn apply_now(&mut self) {
+    fn apply_now(&mut self) -> Result<(), String> {
         if let Err(err) = ensure_all_assets(&self.install_dir, false, &self.log) {
             self.log.line(format!("[error] Asset check failed: {err}"));
-            return;
+            return Err(err);
         }
-        match register_and_apply(self.preset, &self.install_dir, Some(&self.log)) {
+        match modern_inverted_cursor::register_and_apply(self.preset, &self.install_dir, Some(&self.log)) {
             Ok((step, px)) => {
                 self.last_step = step;
                 self.last_px = px;
                 self.sync_tray(true);
+                Ok(())
             }
             Err(err) => {
                 self.log.line(format!("[error] Apply failed: {err}"));
+                Err(err)
             }
         }
     }
@@ -533,10 +535,18 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
             let ptr_after = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut AppState };
             if !ptr_after.is_null() {
                 let state = unsafe { &mut *ptr_after };
-                reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-                reg_delete_value(CONFIG_SUBKEY, "Preset");
-                unregister_uninstall_entry();
-                match restore_backup(&state.backup_path, Some(&state.log)) {
+                let res = perform_validated_restore(
+                    &state.backup_path,
+                    Some(&state.log),
+                    || Ok(0),
+                    || {
+                        reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
+                        reg_delete_value(CONFIG_SUBKEY, "Preset");
+                        unregister_uninstall_entry();
+                        Ok(())
+                    },
+                );
+                match res {
                     Ok(()) => unsafe {
                         PostMessageW(hwnd, WM_CLOSE, 0, 0);
                     },
@@ -551,7 +561,7 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
     match cmd {
         CMD_REAPPLY => {
             state.paused = false;
-            state.apply_now();
+            let _ = state.apply_now();
         }
         CMD_PAUSE => {
             state.paused = !state.paused;
@@ -561,7 +571,7 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
                 "Guardian resumed by user."
             });
             if !state.paused {
-                state.apply_now();
+                let _ = state.apply_now();
             } else {
                 state.sync_tray(true);
             }
@@ -580,7 +590,7 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
             if is_startup_enabled() {
                 let _ = set_startup_enabled(&state.guardian_exe, true);
             }
-            state.apply_now();
+            let _ = state.apply_now();
         }
         CMD_STARTUP => {
             let next = !is_startup_enabled();
@@ -652,7 +662,7 @@ unsafe extern "system" fn wnd_proc(
                 } else if ev == WM_LBUTTONDBLCLK {
                     let state = &mut *ptr;
                     state.paused = false;
-                    state.apply_now();
+                    let _ = state.apply_now();
                 }
                 return 0;
             }
@@ -685,14 +695,14 @@ unsafe extern "system" fn wnd_proc(
             WM_APP_REAPPLY => {
                 let state = &mut *ptr;
                 state.paused = false;
-                state.apply_now();
+                let _ = state.apply_now();
                 return 0;
             }
             WM_TIMER if w_param == TIMER_REAPPLY => {
                 KillTimer(hwnd, TIMER_REAPPLY);
                 let state = &mut *ptr;
                 if !state.paused {
-                    state.apply_now();
+                    let _ = state.apply_now();
                 }
                 return 0;
             }
@@ -772,19 +782,36 @@ fn perform_uninstall(
         return Ok(());
     }
 
-    close_existing_v6_window();
-    reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-    reg_delete_value(CONFIG_SUBKEY, "Preset");
-    unregister_uninstall_entry();
-    restore_backup(backup_path, Some(log))?;
-    if install_dir.exists() {
-        let _ = fs::remove_dir_all(install_dir);
+    perform_validated_restore(
+        backup_path,
+        Some(log),
+        || stop_targeted_guardians(root, Some(log)),
+        || {
+            reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
+            reg_delete_value(CONFIG_SUBKEY, "Preset");
+            unregister_uninstall_entry();
+            if install_dir.exists() {
+                let _ = fs::remove_dir_all(install_dir);
+            }
+            let guardian_exe = root.join(GUARDIAN_EXE_NAME);
+            if guardian_exe.exists() {
+                schedule_self_delete(&guardian_exe);
+            }
+            Ok(())
+        },
+    )
+}
+
+fn arg_value(args: &[String], flag: &str) -> Option<String> {
+    for i in 0..args.len() {
+        if args[i] == flag {
+            return args.get(i + 1).cloned();
+        }
+        if let Some(v) = args[i].strip_prefix(&format!("{flag}=")) {
+            return Some(v.to_string());
+        }
     }
-    let guardian_exe = root.join(GUARDIAN_EXE_NAME);
-    if guardian_exe.exists() {
-        schedule_self_delete(&guardian_exe);
-    }
-    Ok(())
+    None
 }
 
 fn run() -> Result<(), String> {
@@ -793,7 +820,7 @@ fn run() -> Result<(), String> {
     let log = BoundedLogger::new(root.join("guardian.log"), false);
 
     if args.iter().any(|a| a == "--quit") {
-        close_existing_v6_window();
+        stop_targeted_guardians(&root, Some(&log))?;
         return Ok(());
     }
 
@@ -802,29 +829,40 @@ fn run() -> Result<(), String> {
     }
 
     if args.iter().any(|a| a == "--restore") {
-        close_existing_v6_window();
-        reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-        reg_delete_value(CONFIG_SUBKEY, "Preset");
-        unregister_uninstall_entry();
-        return restore_backup(&backup_path, Some(&log));
+        return perform_validated_restore(
+            &backup_path,
+            Some(&log),
+            || stop_targeted_guardians(&root, Some(&log)),
+            || {
+                reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
+                reg_delete_value(CONFIG_SUBKEY, "Preset");
+                unregister_uninstall_entry();
+                Ok(())
+            },
+        );
     }
 
     if args.iter().any(|a| a == "--replace") {
-        close_existing_v6_window();
+        stop_targeted_guardians(&root, Some(&log))?;
     }
+
+    let ready_event = arg_value(&args, "--ready-event");
 
     let w_mutex = wide_z(MUTEX_NAME);
     let mutex = unsafe { CreateMutexW(null_mut(), 0, w_mutex.as_ptr()) };
     if !mutex.is_null() && unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe {
+            CloseHandle(mutex);
+        }
+        if ready_event.is_some() {
+            return Err("Another guardian instance remained active and blocked startup.".into());
+        }
         let w_cls = wide_z(TRAY_WND_CLASS);
         let existing = unsafe { FindWindowW(w_cls.as_ptr(), null()) };
         if !existing.is_null() {
             unsafe {
                 PostMessageW(existing, WM_APP_REAPPLY, 0, 0);
             }
-        }
-        unsafe {
-            CloseHandle(mutex);
         }
         return Ok(());
     }
@@ -931,7 +969,34 @@ fn run() -> Result<(), String> {
             (*state_ptr).last_px
         ));
         (*state_ptr).sync_tray(false);
-        (*state_ptr).apply_now();
+        let init_res = (*state_ptr).apply_now();
+        if let Err(err) = init_res {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            DestroyWindow(hwnd);
+            let mut state = Box::from_raw(state_ptr);
+            if !state.icon_active.is_null() {
+                DestroyIcon(state.icon_active);
+            }
+            if !state.icon_paused.is_null() {
+                DestroyIcon(state.icon_paused);
+            }
+            let _ = &mut state;
+            CloseHandle(reg_event);
+            RegCloseKey(reg_key);
+            if !mutex.is_null() {
+                CloseHandle(mutex);
+            }
+            return Err(format!("Guardian initial cursor application failed: {err}"));
+        }
+        let _ = reg_set_string(CONFIG_SUBKEY, Some("RuntimeVersion"), false, APP_VERSION);
+        let _ = reg_set_dword(
+            CONFIG_SUBKEY,
+            "RuntimePid",
+            std::process::id(),
+        );
+        if let Some(ev_name) = ready_event.as_deref() {
+            NamedReadyEvent::signal_by_name(ev_name)?;
+        }
     }
 
     let arm_notify = |rk: *mut c_void, ev: *mut c_void| -> i32 {

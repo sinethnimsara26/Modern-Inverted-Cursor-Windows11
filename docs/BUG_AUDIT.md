@@ -6,10 +6,10 @@ Every bug listed below was directly verified by inspecting the baseline source c
 
 | ID | Severity | Area | Source Location | Summary | Planned Batch |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **BUG-01** | **High** | Setup -> Guardian Readiness | `src/bin/setup.rs:1839-1852` | Launches guardian, polls `FindWindowW` max 2s, and returns `Ok` even if process crashed immediately or timed out | Batch 02 |
-| **BUG-02** | **High** | Restore / Uninstall Safety | `src/bin/setup.rs:1924-1946`, `2483-2495`; `src/bin/guardian.rs:536-544`, `775-810` | Wipes `Run`, `Preset`, `Uninstall`, and `ModernInvertedCursorGuardian.exe` BEFORE validating or importing `backup-original.reg` | Batch 02 |
-| **BUG-03** | **High** | Silent Install Error Propagation | `src/bin/setup.rs:2512`, `2544-2551` | `--silent` ignores `register_and_apply()` result (`let _ = ...`) and `main()` blocks automated sessions with `MessageBoxW` on error | Batch 02 |
-| **BUG-04** | **High** | Indiscriminate Process Kill | `src/lib.rs:1447-1456` | `stop_any_running_guardian()` unconditionally runs `taskkill.exe /IM ModernInvertedCursorGuardian.exe /F` without PID/path checks | Batch 02 |
+| **BUG-01** | **High** | Setup -> Guardian Readiness | `src/bin/setup.rs`, `src/lib.rs`, `src/bin/guardian.rs` | Launches guardian, polls `FindWindowW` max 2s, and returns `Ok` even if process crashed immediately or timed out | **FIXED (Batch 02)** |
+| **BUG-02** | **High** | Restore / Uninstall Safety | `src/bin/setup.rs`, `src/bin/guardian.rs`, `src/lib.rs` | Wipes `Run`, `Preset`, `Uninstall`, and Guardian EXE BEFORE validating or importing `backup-original.reg` | **FIXED (Batch 02)** |
+| **BUG-03** | **High** | Silent Install Error Propagation | `src/bin/setup.rs` | `--silent` ignores `register_and_apply()` result (`let _ = ...`) and `main()` blocks automated sessions with `MessageBoxW` on error | **FIXED (Batch 02)** |
+| **BUG-04** | **High** | Indiscriminate Process Kill | `src/lib.rs` | `stop_any_running_guardian()` unconditionally runs `taskkill.exe /IM ModernInvertedCursorGuardian.exe /F` without PID/path checks | **FIXED (Batch 02)** |
 | **BUG-05** | **High** | Build Fail-Open Payload | `build.rs:35-37` | Falls back to 0-byte `embedded_guardian.exe` if `dist/` lacks guardian EXE, producing broken Setup EXE via `cargo build` | Batch 04 |
 | **BUG-06** | **High** | Partial Live Cursor Apply | `src/lib.rs:1300-1373` | Writes registry and mutates cursor slots 1..17 one-by-one; mid-loop `LoadImageW`/`SetSystemCursor` failure leaves half-applied cursors | Batch 04 |
 | **BUG-07** | **Medium-High** | Hash Bypass Cache Check | `src/lib.rs:856-863`, `1136` | `assets_quick_ok()` validates byte size only, skipping `git_blob_sha1()` on existing files during guardian start/reapply | Batch 04 |

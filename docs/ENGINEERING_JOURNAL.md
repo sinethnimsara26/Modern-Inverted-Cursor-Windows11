@@ -32,3 +32,19 @@ Chronological technical log of the audit, design decisions, experiments, measure
 
 ### 4. Critical Audit Highlights (Recorded in `docs/BUG_AUDIT.md`)
 Confirmed 14 distinct defects across baseline (`BUG-01` through `BUG-14`), including all 6 pre-identified issues (A–F) plus `build.rs` silent empty-payload fallback, `assets_quick_ok` hash bypass, WinHTTP session/timeout/cap omissions + `LoadLibraryW` refcount leaks, partial cursor apply leaving mixed system handles, `cmd.exe /C` path interpolation, `Backbuffer::destroy()` deleting a selected `HBITMAP`, non-terminating `TIMER_ANIM`, stale `HWND` worker messages, and `Setup`/`Guardian` coupling.
+
+---
+
+## Batch 02 — Critical Installation Readiness, Safe Restore & Targeted Shutdown
+
+1. **Observed Problems (`BUG-01`..`BUG-04`):** Silent guardian startup failures reported false `Ok`, restore wiped startup/uninstall metadata before verifying `backup-original.reg`, `--silent` discarded cursor-apply errors and blocked on `MessageBoxW`, and `taskkill /IM` indiscriminately targeted any process matching the filename.
+2. **Design & Implementation:**
+   - Replaced `stop_any_running_guardian()` (`taskkill /IM`) with `stop_targeted_guardians()` (`src/lib.rs`): verifies tray HWND PID + `CreateToolhelp32Snapshot` process list against `QueryFullProcessImageNameW` path inside the install root before posting `WM_CLOSE` and bounded `WaitForSingleObject`, with targeted `TerminateProcess` fallback only on verified PIDs.
+   - Added `NamedReadyEvent` (`CreateEventW`/`WaitForMultipleObjects`), `RuntimeVersion`/`RuntimePid` verification, tray PID match, and `InstallSnapshot::rollback()` (`src/bin/setup.rs` & `src/bin/guardian.rs`): crashes or timeouts fail closed cleanly and roll back newly written state.
+   - Added `validate_cursor_backup_bytes()` + `perform_validated_restore()` + `--restore-system-defaults`: every restore/uninstall validates `.reg` encoding, header, and strictly scoped `[HKEY_CURRENT_USER\Control Panel\Cursors]` sections BEFORE touching guardian/registry/files.
+   - Fixed `--silent` error propagation and headless `main()` error handling (writes `setup-error.log` + stderr, zero `MessageBoxW` blocking).
+3. **Tests Executed:**
+   - Added 5 new unit/integration tests covering `ProcessEntry32W` ABI (x64 `568` B / x86 `556` B), `.reg` validation (UTF-16LE/UTF-8/corrupt/out-of-scope), transactional refusal on corrupt backup, guardian image-path verification, real child-process crash & timeout readiness detection, and headless detection.
+   - `cargo test` (`1.99.0` x64): **`16/16 PASSED`** (`11` lib + `1` guardian + `4` setup).
+   - `cargo +1.75.0 test --target x86_64-pc-windows-msvc`: **`16/16 PASSED`**.
+   - `cargo +1.75.0 test --target i686-pc-windows-msvc`: **`16/16 PASSED`**.
