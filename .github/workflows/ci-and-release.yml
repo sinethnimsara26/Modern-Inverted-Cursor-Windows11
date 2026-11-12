@@ -1,0 +1,47 @@
+name: CI & Release Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries and run unit tests
+        shell: pwsh
+        run: |
+          ./build.ps1
+
+      - name: Verify Dark-Mode Setup UI smoke rendering
+        shell: pwsh
+        run: |
+          $smoke = "$env:RUNNER_TEMP\smoke_ui"
+          Start-Process -FilePath ".\dist\ModernInvertedSetup-v1.0.0.exe" -ArgumentList "--smoke-ui `"$smoke`"" -Wait
+          if (!(Test-Path "$smoke\01_setup_dark.bmp")) { throw "Missing setup UI smoke screenshot" }
+          if (!(Test-Path "$smoke\02_installing_dark.bmp")) { throw "Missing progress UI smoke screenshot" }
+          if (!(Test-Path "$smoke\03_done_dark.bmp")) { throw "Missing done UI smoke screenshot" }
+          Get-Content "$smoke\smoke-ui-report.txt"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModernInvertedCursors-Windows-x64
+          path: |
+            dist/ModernInvertedSetup-v1.0.0.exe
+            dist/ModernInvertedCursorGuardian.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

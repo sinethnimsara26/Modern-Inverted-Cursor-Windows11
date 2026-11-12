@@ -321,10 +321,33 @@ That gives a consistent +4 px step and avoids magnifying the low-bit-depth XOR/i
 
 Final source:
 
-`final/modern_inverted_installer_v5_1_balanced.rs`
+`archive/modern_inverted_installer_v5_1_balanced.rs` *(also preserved on the `legacy-v5.1` branch)*
 
-Final executable:
+Final executable on `legacy-v5.1`:
 
-`dist/ModernInvertedInstallerV5_1.exe`
+`ModernInvertedInstallerV5_1.exe`
 
 The user tested V5.1 and confirmed it worked.
+
+## 14. V6 Silent Tray Guardian: eliminating the Windows Terminal popup (2026-11-12)
+
+Living with V5.1 exposed a major day-to-day annoyance and resource overhead:
+
+1. Because `ModernInvertedInstallerV5_1.exe` compiled as a default `console` subsystem executable and copied itself to `ModernInvertedCursorGuardian.exe`, Windows Explorer's `HKCU\...\Run` startup opened a full Windows Terminal window on the taskbar at every sign-in; closing that window killed the guardian.
+2. Each apply spawned `reg.exe` ~22 times and created a new `installer-*.log` file on every boot.
+3. The unstripped GNU binary was ~5.16 MB (`7.53 MB` Working Set).
+
+V6 introduced a dedicated `#![windows_subsystem = "windows"]` system-tray daemon (`src/bin/guardian.rs`) backed by a shared Win32 core (`src/lib.rs`):
+
+- Replaced `reg.exe` subprocesses with direct `advapi32.dll` Registry calls (`RegCreateKeyExW`, `RegGetValueW`, `RegSetValueExW`, `RegNotifyChangeKeyValue`).
+- Combined kernel `RegNotifyChangeKeyValue` notifications and the Win32 message loop on a single thread using `MsgWaitForMultipleObjectsEx` and a 400 ms `SetTimer` debounce (`0.00%` idle CPU).
+- Added a custom 4×4 anti-aliased split-contrast 32×32 cursor tray icon in Windows 11 **Show hidden icons** (`Shell_NotifyIconW`) with live preset switching, Pause/Resume, Startup toggle, Explorer `TaskbarCreated` recovery, `WM_WTSSESSION_CHANGE` unlock recovery, `WM_DISPLAYCHANGE`, and `WM_POWERBROADCAST` sleep resume.
+- Trimmed working set via `SetProcessWorkingSetSize` and replaced endless per-boot log files with a single 32 KB rotating `guardian.log`.
+
+## 15. v1.0.0 Dark-Mode Modern GUI Setup (2026-11-12)
+
+To make setup on any brand-new Windows 10/11 PC smooth and welcoming without a single console window:
+
+- Built `src/bin/setup.rs` (`ModernInvertedSetup-v1.0.0.exe`) using pure Win32 + DWM dark-mode chrome (`DWMWA_USE_IMMERSIVE_DARK_MODE`, `DWMWA_WINDOW_CORNER_PREFERENCE`), Per-Monitor DPI V2 scaling, and double-buffered SDF/ClearType custom dark rendering.
+- Added 4-thread parallel download + Git blob SHA-1 verification for all 32 upstream v3.6.2 cursor assets.
+- Added clean per-user Windows Settings **Installed Apps** integration (`HKCU\...\Uninstall\ModernInvertedCursors`) supporting one-click restore & uninstall (`--uninstall`).

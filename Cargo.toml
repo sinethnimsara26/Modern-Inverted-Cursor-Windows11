@@ -1,0 +1,28 @@
+[package]
+name = "modern-inverted-cursor"
+version = "1.0.0"
+edition = "2021"
+description = "Pure-Rust Windows 11 Dark Mode installer and ultra-lightweight system-tray guardian for Modern Inverted Mouse Cursors v3.6.2"
+license = "MIT"
+
+[lib]
+name = "modern_inverted_cursor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ModernInvertedCursorGuardian"
+path = "src/bin/guardian.rs"
+
+[[bin]]
+name = "ModernInvertedSetup"
+path = "src/bin/setup.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+panic = "abort"
+strip = "symbols"
+codegen-units = 1
+debug = false

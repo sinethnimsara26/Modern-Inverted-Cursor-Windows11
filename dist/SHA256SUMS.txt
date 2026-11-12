@@ -1,0 +1,2 @@
+9fcf563277fda9e44c25ebcfe78ad8fde6ee94f62c64aedb3ae66472b2f3f166  ModernInvertedCursorGuardian.exe
+11975328bfffd07e1cbe1e4ad1b9d3b382d78800117ea28a352b8a306806ece5  ModernInvertedSetup-v1.0.0.exe
