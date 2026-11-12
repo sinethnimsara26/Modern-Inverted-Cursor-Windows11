@@ -1,17 +1,21 @@
-use crate::registry::{wide_z, BoundedLogger, CREATE_NO_WINDOW};
+use crate::registry::{load_system_dll, wide_z, BoundedLogger, CREATE_NO_WINDOW};
 use std::{
     ffi::c_void,
     fs,
     os::windows::process::CommandExt,
     path::Path,
     process::{Command, Stdio},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        OnceLock,
+    },
     thread,
     time::Duration,
 };
 
 pub const REPO_RAW: &str =
     "https://raw.githubusercontent.com/emvaized/modern_inverted_mouse_cursors/3.6.2/src";
+pub const MAX_ASSET_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy)]
 pub struct Asset {
@@ -58,7 +62,6 @@ pub const ASSETS: &[Asset] = &[
 #[link(name = "kernel32")]
 extern "system" {
     fn GetLastError() -> u32;
-    fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
 }
 
@@ -140,6 +143,16 @@ pub fn git_blob_sha1(bytes: &[u8]) -> String {
 }
 
 pub fn verify_asset_file(asset: Asset, path: &Path) -> Result<(), String> {
+    let meta = fs::metadata(path)
+        .map_err(|e| format!("Could not stat {} for verification: {e}", path.display()))?;
+    if meta.len() != asset.size {
+        return Err(format!(
+            "{} has wrong size: expected {}, got {} bytes.",
+            asset.name,
+            asset.size,
+            meta.len()
+        ));
+    }
     let bytes = fs::read(path)
         .map_err(|e| format!("Could not read {} for verification: {e}", path.display()))?;
     if bytes.len() as u64 != asset.size {
@@ -160,15 +173,6 @@ pub fn verify_asset_file(asset: Asset, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn assets_quick_ok(dir: &Path) -> bool {
-    ASSETS.iter().all(|a| {
-        let p = dir.join(a.name);
-        fs::metadata(&p)
-            .map(|m| m.is_file() && m.len() == a.size)
-            .unwrap_or(false)
-    })
-}
-
 pub fn parse_https_url(url: &str) -> Option<(&str, &str)> {
     let rest = url.strip_prefix("https://")?;
     let slash = rest.find('/')?;
@@ -180,180 +184,263 @@ pub fn parse_https_url(url: &str) -> Option<(&str, &str)> {
     Some((host, path))
 }
 
-fn winhttp_download_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let (host, path) = parse_https_url(url)
-        .ok_or_else(|| format!("Unsupported URL for WinHTTP: {url}"))?;
+type WinHttpOpenFn =
+    unsafe extern "system" fn(*const u16, u32, *const u16, *const u16, u32) -> *mut c_void;
+type WinHttpSetOptionFn =
+    unsafe extern "system" fn(*mut c_void, u32, *const c_void, u32) -> i32;
+type WinHttpSetTimeoutsFn =
+    unsafe extern "system" fn(*mut c_void, i32, i32, i32, i32) -> i32;
+type WinHttpConnectFn =
+    unsafe extern "system" fn(*mut c_void, *const u16, u16, u32) -> *mut c_void;
+type WinHttpOpenRequestFn = unsafe extern "system" fn(
+    *mut c_void,
+    *const u16,
+    *const u16,
+    *const u16,
+    *const u16,
+    *const *const u16,
+    u32,
+) -> *mut c_void;
+type WinHttpSendRequestFn = unsafe extern "system" fn(
+    *mut c_void,
+    *const u16,
+    u32,
+    *mut c_void,
+    u32,
+    u32,
+    usize,
+) -> i32;
+type WinHttpReceiveResponseFn = unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32;
+type WinHttpQueryHeadersFn = unsafe extern "system" fn(
+    *mut c_void,
+    u32,
+    *const u16,
+    *mut c_void,
+    *mut u32,
+    *mut u32,
+) -> i32;
+type WinHttpReadDataFn =
+    unsafe extern "system" fn(*mut c_void, *mut u8, u32, *mut u32) -> i32;
+type WinHttpCloseFn = unsafe extern "system" fn(*mut c_void) -> i32;
 
-    type WinHttpOpenFn =
-        unsafe extern "system" fn(*const u16, u32, *const u16, *const u16, u32) -> *mut c_void;
-    type WinHttpSetOptionFn =
-        unsafe extern "system" fn(*mut c_void, u32, *const c_void, u32) -> i32;
-    type WinHttpConnectFn =
-        unsafe extern "system" fn(*mut c_void, *const u16, u16, u32) -> *mut c_void;
-    type WinHttpOpenRequestFn = unsafe extern "system" fn(
-        *mut c_void,
-        *const u16,
-        *const u16,
-        *const u16,
-        *const u16,
-        *const *const u16,
-        u32,
-    ) -> *mut c_void;
-    type WinHttpSendRequestFn = unsafe extern "system" fn(
-        *mut c_void,
-        *const u16,
-        u32,
-        *mut c_void,
-        u32,
-        u32,
-        usize,
-    ) -> i32;
-    type WinHttpReceiveResponseFn = unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32;
-    type WinHttpQueryHeadersFn = unsafe extern "system" fn(
-        *mut c_void,
-        u32,
-        *const u16,
-        *mut c_void,
-        *mut u32,
-        *mut u32,
-    ) -> i32;
-    type WinHttpReadDataFn =
-        unsafe extern "system" fn(*mut c_void, *mut u8, u32, *mut u32) -> i32;
-    type WinHttpCloseFn = unsafe extern "system" fn(*mut c_void) -> i32;
+#[derive(Clone, Copy)]
+struct WinHttpApi {
+    open_fn: WinHttpOpenFn,
+    set_opt_fn: WinHttpSetOptionFn,
+    set_timeouts_fn: WinHttpSetTimeoutsFn,
+    connect_fn: WinHttpConnectFn,
+    open_req_fn: WinHttpOpenRequestFn,
+    send_req_fn: WinHttpSendRequestFn,
+    recv_resp_fn: WinHttpReceiveResponseFn,
+    query_hdrs_fn: WinHttpQueryHeadersFn,
+    read_data_fn: WinHttpReadDataFn,
+    close_fn: WinHttpCloseFn,
+}
 
-    struct SafeWinHttpHandle {
-        handle: *mut c_void,
-        close_fn: WinHttpCloseFn,
-    }
-    impl Drop for SafeWinHttpHandle {
-        fn drop(&mut self) {
-            if !self.handle.is_null() {
-                // SAFETY: Valid HINTERNET handle closed via `WinHttpCloseHandle`.
-                unsafe {
-                    (self.close_fn)(self.handle);
-                }
+static WINHTTP_API: OnceLock<Result<WinHttpApi, String>> = OnceLock::new();
+
+fn winhttp_api() -> Result<WinHttpApi, String> {
+    WINHTTP_API
+        .get_or_init(|| unsafe {
+            let dll = load_system_dll("winhttp.dll");
+            if dll.is_null() {
+                return Err("Could not load System32 winhttp.dll".into());
+            }
+            macro_rules! load_proc {
+                ($name:expr, $ty:ty) => {{
+                    let p = GetProcAddress(dll, $name.as_ptr());
+                    if p.is_null() {
+                        return Err(format!(
+                            "Missing WinHTTP export {}",
+                            String::from_utf8_lossy($name).trim_end_matches('\0')
+                        ));
+                    }
+                    std::mem::transmute::<*mut c_void, $ty>(p)
+                }};
+            }
+            Ok(WinHttpApi {
+                open_fn: load_proc!(b"WinHttpOpen\0", WinHttpOpenFn),
+                set_opt_fn: load_proc!(b"WinHttpSetOption\0", WinHttpSetOptionFn),
+                set_timeouts_fn: load_proc!(b"WinHttpSetTimeouts\0", WinHttpSetTimeoutsFn),
+                connect_fn: load_proc!(b"WinHttpConnect\0", WinHttpConnectFn),
+                open_req_fn: load_proc!(b"WinHttpOpenRequest\0", WinHttpOpenRequestFn),
+                send_req_fn: load_proc!(b"WinHttpSendRequest\0", WinHttpSendRequestFn),
+                recv_resp_fn: load_proc!(b"WinHttpReceiveResponse\0", WinHttpReceiveResponseFn),
+                query_hdrs_fn: load_proc!(b"WinHttpQueryHeaders\0", WinHttpQueryHeadersFn),
+                read_data_fn: load_proc!(b"WinHttpReadData\0", WinHttpReadDataFn),
+                close_fn: load_proc!(b"WinHttpCloseHandle\0", WinHttpCloseFn),
+            })
+        })
+        .clone()
+}
+
+struct SafeWinHttpHandle {
+    handle: *mut c_void,
+    close_fn: WinHttpCloseFn,
+}
+
+impl Drop for SafeWinHttpHandle {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            // SAFETY: Handle opened by WinHTTP and closed once via `WinHttpCloseHandle`.
+            unsafe {
+                (self.close_fn)(self.handle);
             }
         }
-    }
-
-    // SAFETY: Dynamically resolves WinHTTP exports cleanly with RAII handle cleanup.
-    unsafe {
-        let dll = LoadLibraryW(wide_z("winhttp.dll").as_ptr());
-        if dll.is_null() {
-            return Err("Could not load winhttp.dll".into());
-        }
-        macro_rules! load_proc {
-            ($name:expr, $ty:ty) => {{
-                let p = GetProcAddress(dll, $name.as_ptr());
-                if p.is_null() {
-                    return Err(format!(
-                        "Missing WinHTTP export {}",
-                        String::from_utf8_lossy($name).trim_end_matches('\0')
-                    ));
-                }
-                std::mem::transmute::<*mut c_void, $ty>(p)
-            }};
-        }
-
-        let open_fn = load_proc!(b"WinHttpOpen\0", WinHttpOpenFn);
-        let set_opt_fn = load_proc!(b"WinHttpSetOption\0", WinHttpSetOptionFn);
-        let connect_fn = load_proc!(b"WinHttpConnect\0", WinHttpConnectFn);
-        let open_req_fn = load_proc!(b"WinHttpOpenRequest\0", WinHttpOpenRequestFn);
-        let send_req_fn = load_proc!(b"WinHttpSendRequest\0", WinHttpSendRequestFn);
-        let recv_resp_fn = load_proc!(b"WinHttpReceiveResponse\0", WinHttpReceiveResponseFn);
-        let query_hdrs_fn = load_proc!(b"WinHttpQueryHeaders\0", WinHttpQueryHeadersFn);
-        let read_data_fn = load_proc!(b"WinHttpReadData\0", WinHttpReadDataFn);
-        let close_fn = load_proc!(b"WinHttpCloseHandle\0", WinHttpCloseFn);
-
-        let agent = wide_z("ModernInvertedCursors/1.1");
-        let mut h_session = open_fn(agent.as_ptr(), 4, std::ptr::null(), std::ptr::null(), 0);
-        if h_session.is_null() {
-            h_session = open_fn(agent.as_ptr(), 0, std::ptr::null(), std::ptr::null(), 0);
-        }
-        if h_session.is_null() {
-            return Err(format!("WinHttpOpen failed (err={})", GetLastError()));
-        }
-        let session = SafeWinHttpHandle { handle: h_session, close_fn };
-
-        let tls_12_13: u32 = 0x0000_0800 | 0x0000_2000;
-        if set_opt_fn(
-            session.handle,
-            84,
-            &tls_12_13 as *const u32 as *const c_void,
-            std::mem::size_of::<u32>() as u32,
-        ) == 0
-        {
-            let tls_12: u32 = 0x0000_0800;
-            let _ = set_opt_fn(
-                session.handle,
-                84,
-                &tls_12 as *const u32 as *const c_void,
-                std::mem::size_of::<u32>() as u32,
-            );
-        }
-
-        let host_w = wide_z(host);
-        let h_connect = connect_fn(session.handle, host_w.as_ptr(), 443, 0);
-        if h_connect.is_null() {
-            return Err(format!("WinHttpConnect failed (err={})", GetLastError()));
-        }
-        let connect = SafeWinHttpHandle { handle: h_connect, close_fn };
-
-        let verb_w = wide_z("GET");
-        let path_w = wide_z(path);
-        let h_req = open_req_fn(
-            connect.handle,
-            verb_w.as_ptr(),
-            path_w.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0x0080_0000,
-        );
-        if h_req.is_null() {
-            return Err(format!("WinHttpOpenRequest failed (err={})", GetLastError()));
-        }
-        let req = SafeWinHttpHandle { handle: h_req, close_fn };
-
-        if send_req_fn(req.handle, std::ptr::null(), 0, std::ptr::null_mut(), 0, 0, 0) == 0 {
-            return Err(format!("WinHttpSendRequest failed (err={})", GetLastError()));
-        }
-        if recv_resp_fn(req.handle, std::ptr::null_mut()) == 0 {
-            return Err(format!("WinHttpReceiveResponse failed (err={})", GetLastError()));
-        }
-
-        let mut status: u32 = 0;
-        let mut status_len: u32 = std::mem::size_of::<u32>() as u32;
-        if query_hdrs_fn(
-            req.handle,
-            19 | 0x2000_0000,
-            std::ptr::null(),
-            &mut status as *mut u32 as *mut c_void,
-            &mut status_len,
-            std::ptr::null_mut(),
-        ) != 0
-            && status >= 400
-        {
-            return Err(format!("HTTP status {status}"));
-        }
-
-        let mut out = Vec::with_capacity(8192);
-        let mut buf = [0u8; 8192];
-        loop {
-            let mut read: u32 = 0;
-            if read_data_fn(req.handle, buf.as_mut_ptr(), buf.len() as u32, &mut read) == 0 {
-                return Err(format!("WinHttpReadData failed (err={})", GetLastError()));
-            }
-            if read == 0 {
-                break;
-            }
-            out.extend_from_slice(&buf[..read as usize]);
-        }
-        Ok(out)
     }
 }
 
-pub fn download_asset(asset: Asset, dir: &Path, log: Option<&BoundedLogger>) -> Result<(), String> {
+/// Reusable per-thread HTTPS session + connection to a single host with explicit
+/// timeouts, TLS 1.2/1.3 selection, and bounded response reading (`<= MAX_ASSET_BYTES`).
+struct WinHttpHostSession {
+    api: WinHttpApi,
+    _session: SafeWinHttpHandle,
+    connect: SafeWinHttpHandle,
+}
+
+impl WinHttpHostSession {
+    fn open(host: &str) -> Result<Self, String> {
+        let api = winhttp_api()?;
+        let agent = wide_z("ModernInvertedCursors/1.1");
+        // SAFETY: `WinHttpOpen`, `WinHttpSetTimeouts`, `WinHttpSetOption`, and `WinHttpConnect` handles wrapped in RAII `SafeWinHttpHandle`.
+        unsafe {
+            // Default proxy reads explicit system WinHTTP proxy instantaneously without WPAD broadcast;
+            // fall back to Win8.1+ automatic proxy only if default open fails.
+            let mut h_session =
+                (api.open_fn)(agent.as_ptr(), 0, std::ptr::null(), std::ptr::null(), 0);
+            if h_session.is_null() {
+                h_session =
+                    (api.open_fn)(agent.as_ptr(), 4, std::ptr::null(), std::ptr::null(), 0);
+            }
+            if h_session.is_null() {
+                return Err(format!("WinHttpOpen failed (err={})", GetLastError()));
+            }
+            let session = SafeWinHttpHandle {
+                handle: h_session,
+                close_fn: api.close_fn,
+            };
+
+            // Bound DNS resolve (10s), TCP+TLS connect (20s to tolerate 11s+ cold ISPs), send (15s), receive (20s).
+            let _ = (api.set_timeouts_fn)(session.handle, 10_000, 20_000, 15_000, 20_000);
+
+            let tls_12_13: u32 = 0x0000_0800 | 0x0000_2000;
+            if (api.set_opt_fn)(
+                session.handle,
+                84,
+                &tls_12_13 as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            ) == 0
+            {
+                let tls_12: u32 = 0x0000_0800;
+                let _ = (api.set_opt_fn)(
+                    session.handle,
+                    84,
+                    &tls_12 as *const u32 as *const c_void,
+                    std::mem::size_of::<u32>() as u32,
+                );
+            }
+
+            let host_w = wide_z(host);
+            let h_connect = (api.connect_fn)(session.handle, host_w.as_ptr(), 443, 0);
+            if h_connect.is_null() {
+                return Err(format!("WinHttpConnect failed (err={})", GetLastError()));
+            }
+            let connect = SafeWinHttpHandle {
+                handle: h_connect,
+                close_fn: api.close_fn,
+            };
+
+            Ok(Self {
+                api,
+                _session: session,
+                connect,
+            })
+        }
+    }
+
+    fn fetch_path(&self, path: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+        let verb_w = wide_z("GET");
+        let path_w = wide_z(path);
+        // SAFETY: Uses initialized `connect` handle and closes request handle before returning.
+        unsafe {
+            let h_req = (self.api.open_req_fn)(
+                self.connect.handle,
+                verb_w.as_ptr(),
+                path_w.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0x0080_0000,
+            );
+            if h_req.is_null() {
+                return Err(format!("WinHttpOpenRequest failed (err={})", GetLastError()));
+            }
+            let req = SafeWinHttpHandle {
+                handle: h_req,
+                close_fn: self.api.close_fn,
+            };
+
+            if (self.api.send_req_fn)(req.handle, std::ptr::null(), 0, std::ptr::null_mut(), 0, 0, 0)
+                == 0
+            {
+                return Err(format!("WinHttpSendRequest failed (err={})", GetLastError()));
+            }
+            if (self.api.recv_resp_fn)(req.handle, std::ptr::null_mut()) == 0 {
+                return Err(format!(
+                    "WinHttpReceiveResponse failed (err={})",
+                    GetLastError()
+                ));
+            }
+
+            let mut status: u32 = 0;
+            let mut status_len: u32 = std::mem::size_of::<u32>() as u32;
+            if (self.api.query_hdrs_fn)(
+                req.handle,
+                19 | 0x2000_0000,
+                std::ptr::null(),
+                &mut status as *mut u32 as *mut c_void,
+                &mut status_len,
+                std::ptr::null_mut(),
+            ) != 0
+                && status >= 400
+            {
+                return Err(format!("HTTP status {status}"));
+            }
+
+            let mut out = Vec::with_capacity(8192);
+            let mut buf = [0u8; 8192];
+            loop {
+                let mut read: u32 = 0;
+                if (self.api.read_data_fn)(
+                    req.handle,
+                    buf.as_mut_ptr(),
+                    buf.len() as u32,
+                    &mut read,
+                ) == 0
+                {
+                    return Err(format!("WinHttpReadData failed (err={})", GetLastError()));
+                }
+                if read == 0 {
+                    break;
+                }
+                if out.len() + (read as usize) > max_bytes {
+                    return Err(format!(
+                        "Remote response exceeded maximum asset size limit ({max_bytes} bytes)."
+                    ));
+                }
+                out.extend_from_slice(&buf[..read as usize]);
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn download_with_session(
+    asset: Asset,
+    dir: &Path,
+    log: Option<&BoundedLogger>,
+    session: Option<&WinHttpHostSession>,
+) -> Result<(), String> {
     let final_path = dir.join(asset.name);
     if final_path.exists() {
         if verify_asset_file(asset, &final_path).is_ok() {
@@ -368,11 +455,18 @@ pub fn download_asset(asset: Asset, dir: &Path, log: Option<&BoundedLogger>) -> 
     let temp_path = dir.join(format!("{}.part", asset.name));
     let _ = fs::remove_file(&temp_path);
     let url = format!("{REPO_RAW}/{}", asset.name);
+    let (_, path) = parse_https_url(&url).ok_or_else(|| format!("Invalid asset URL: {url}"))?;
 
     let mut winhttp_ok = false;
     let mut winhttp_err = String::new();
     for attempt in 0..3 {
-        match winhttp_download_bytes(&url) {
+        let fetched = if let Some(s) = session {
+            s.fetch_path(path, MAX_ASSET_BYTES)
+        } else {
+            let (host, _) = parse_https_url(&url).unwrap();
+            WinHttpHostSession::open(host).and_then(|s| s.fetch_path(path, MAX_ASSET_BYTES))
+        };
+        match fetched {
             Ok(bytes) => {
                 fs::write(&temp_path, &bytes)
                     .map_err(|e| format!("Could not write {}: {e}", temp_path.display()))?;
@@ -397,13 +491,13 @@ pub fn download_asset(asset: Asset, dir: &Path, log: Option<&BoundedLogger>) -> 
                 "--silent",
                 "--show-error",
                 "--retry",
-                "4",
+                "3",
                 "--retry-delay",
                 "1",
                 "--connect-timeout",
-                "15",
+                "20",
                 "--max-time",
-                "90",
+                "30",
                 "--output",
             ])
             .arg(&temp_path)
@@ -436,14 +530,30 @@ pub fn download_asset(asset: Asset, dir: &Path, log: Option<&BoundedLogger>) -> 
     Ok(())
 }
 
-pub fn ensure_all_assets(dir: &Path, verify_all: bool, log: &BoundedLogger) -> Result<(), String> {
+pub fn download_asset(asset: Asset, dir: &Path, log: Option<&BoundedLogger>) -> Result<(), String> {
+    download_with_session(asset, dir, log, None)
+}
+
+/// Ensures every asset exists on disk and passes full Git blob SHA-1 + byte-size verification
+/// (no size-only hash bypass).
+pub fn ensure_all_assets(dir: &Path, _verify_all: bool, log: &BoundedLogger) -> Result<(), String> {
     fs::create_dir_all(dir)
         .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-    if !verify_all && assets_quick_ok(dir) {
+    let mut missing = Vec::new();
+    for asset in ASSETS {
+        let p = dir.join(asset.name);
+        if p.exists() && verify_asset_file(*asset, &p).is_ok() {
+            continue;
+        }
+        missing.push(*asset);
+    }
+    if missing.is_empty() {
         return Ok(());
     }
-    for asset in ASSETS {
-        download_asset(*asset, dir, Some(log))?;
+    let session = parse_https_url(REPO_RAW)
+        .and_then(|(host, _)| WinHttpHostSession::open(host).ok());
+    for asset in missing {
+        download_with_session(asset, dir, Some(log), session.as_ref())?;
     }
     Ok(())
 }
@@ -478,6 +588,7 @@ where
 
     let next_idx = AtomicUsize::new(0);
     let done_count = AtomicUsize::new(cached_done);
+    let cancelled = AtomicBool::new(false);
     let workers = missing.len().min(4);
     let mut first_err: Option<String> = None;
 
@@ -489,20 +600,33 @@ where
             let missing_ref = &missing;
             let next_ref = &next_idx;
             let done_ref = &done_count;
-            s.spawn(move || loop {
-                let i = next_ref.fetch_add(1, Ordering::Relaxed);
-                if i >= missing_ref.len() {
-                    break;
+            let cancel_ref = &cancelled;
+            s.spawn(move || {
+                // Keep one HTTP/TLS session open per worker thread across its asset slice.
+                let session = parse_https_url(REPO_RAW)
+                    .and_then(|(host, _)| WinHttpHostSession::open(host).ok());
+                loop {
+                    if cancel_ref.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let i = next_ref.fetch_add(1, Ordering::Relaxed);
+                    if i >= missing_ref.len() {
+                        break;
+                    }
+                    let asset = missing_ref[i];
+                    let res = download_with_session(asset, dir, log, session.as_ref());
+                    if res.is_err() {
+                        cancel_ref.store(true, Ordering::Release);
+                    }
+                    let finished = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
+                    let _ = tx.send((finished, asset.name, res));
                 }
-                let asset = missing_ref[i];
-                let res = download_asset(asset, dir, log);
-                let finished = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
-                let _ = tx.send((finished, asset.name, res));
             });
         }
         drop(tx);
         while let Ok((finished, name, res)) = rx.recv() {
             if let Err(err) = res {
+                cancelled.store(true, Ordering::Release);
                 if first_err.is_none() {
                     first_err = Some(err);
                 }

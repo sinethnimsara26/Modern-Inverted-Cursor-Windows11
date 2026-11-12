@@ -127,42 +127,30 @@ pub fn reload_cursors() -> Result<(), String> {
     }
 }
 
-fn load_and_set_system_cursor(
-    path: &Path,
-    id: u32,
-    label: &str,
-    cursor_size: u32,
-) -> Result<(), String> {
+fn load_cursor_handle(path: &Path, label: &str, cursor_size: u32) -> Result<*mut c_void, String> {
     const IMAGE_CURSOR: u32 = 2;
     const LR_LOADFROMFILE: u32 = 0x0000_0010;
     let wide = wide_z(&path.to_string_lossy());
 
-    // SAFETY: Non-shared cursor handle loaded via `LR_LOADFROMFILE`; `SetSystemCursor` takes ownership on success, otherwise `DestroyCursor` cleans up.
-    unsafe {
-        let handle = LoadImageW(
+    // SAFETY: Loads a non-shared cursor handle (`LR_LOADFROMFILE`); caller owns it until passed to `SetSystemCursor` or freed via `DestroyCursor`.
+    let handle = unsafe {
+        LoadImageW(
             std::ptr::null_mut(),
             wide.as_ptr(),
             IMAGE_CURSOR,
             cursor_size as i32,
             cursor_size as i32,
             LR_LOADFROMFILE,
-        );
-        if handle.is_null() {
-            let err = GetLastError();
-            return Err(format!(
-                "LoadImageW failed for {label}: {} at {cursor_size}px (err={err})",
-                path.display()
-            ));
-        }
-
-        let ok = SetSystemCursor(handle, id);
-        if ok == 0 {
-            let err = GetLastError();
-            DestroyCursor(handle);
-            return Err(format!("SetSystemCursor failed for {label} / {id} (err={err})"));
-        }
+        )
+    };
+    if handle.is_null() {
+        let err = unsafe { GetLastError() };
+        return Err(format!(
+            "LoadImageW failed for {label}: {} at {cursor_size}px (err={err})",
+            path.display()
+        ));
     }
-    Ok(())
+    Ok(handle)
 }
 
 pub fn register_and_apply(
@@ -174,16 +162,6 @@ pub fn register_and_apply(
     if values.len() != ROLES.len() {
         return Err("Internal cursor role count mismatch.".into());
     }
-
-    let scheme_string = values.join(",");
-    reg_set_string(SCHEMES_SUBKEY, Some(preset.name()), true, &scheme_string)?;
-    reg_set_string(CURSORS_SUBKEY, None, false, preset.name())?;
-    for (role, value) in ROLES.iter().zip(values.iter()) {
-        reg_set_string(CURSORS_SUBKEY, Some(role), true, value)?;
-    }
-    reg_set_dword(CURSORS_SUBKEY, "Scheme Source", 0)?;
-
-    let _ = reload_cursors();
 
     let (arrow, help, working) = preset.custom_files();
     let system_root = env::var_os("SystemRoot")
@@ -213,14 +191,60 @@ pub fn register_and_apply(
 
     let step = current_accessibility_step();
     let px = balanced_cursor_size(step);
+
+    // Phase 1: Pre-load and validate ALL cursor handles BEFORE mutating registry or live handles.
+    let mut loaded: Vec<(&str, u32, bool, *mut c_void)> = Vec::with_capacity(live.len());
     for (label, path, id) in live {
         let optional = id == 32631 || id == 32671 || id == 32672;
         if !path.exists() && optional {
             continue;
         }
-        if let Err(err) = load_and_set_system_cursor(&path, id, label, px) {
+        match load_cursor_handle(&path, label, px) {
+            Ok(h) => loaded.push((label, id, optional, h)),
+            Err(err) => {
+                if !optional {
+                    // Clean up every already-loaded handle cleanly so nothing mutates on failure.
+                    for (_, _, _, prev_h) in loaded {
+                        // SAFETY: Non-shared handle not yet passed to `SetSystemCursor`.
+                        unsafe {
+                            DestroyCursor(prev_h);
+                        }
+                    }
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    // Phase 2: Persist cursor scheme in HKCU once all assets loaded cleanly.
+    let scheme_string = values.join(",");
+    reg_set_string(SCHEMES_SUBKEY, Some(preset.name()), true, &scheme_string)?;
+    reg_set_string(CURSORS_SUBKEY, None, false, preset.name())?;
+    for (role, value) in ROLES.iter().zip(values.iter()) {
+        reg_set_string(CURSORS_SUBKEY, Some(role), true, value)?;
+    }
+    reg_set_dword(CURSORS_SUBKEY, "Scheme Source", 0)?;
+
+    let _ = reload_cursors();
+
+    // Phase 3: Atomically swap loaded handles; roll back with `reload_cursors()` if a required swap fails.
+    for idx in 0..loaded.len() {
+        let (label, id, optional, handle) = loaded[idx];
+        // SAFETY: `SetSystemCursor` destroys `handle` on success; on failure we free remaining handles cleanly.
+        let ok = unsafe { SetSystemCursor(handle, id) };
+        if ok == 0 {
+            let err = unsafe { GetLastError() };
+            unsafe {
+                DestroyCursor(handle);
+            }
             if !optional {
-                return Err(err);
+                for &(_, _, _, rem_h) in &loaded[idx + 1..] {
+                    unsafe {
+                        DestroyCursor(rem_h);
+                    }
+                }
+                let _ = reload_cursors();
+                return Err(format!("SetSystemCursor failed for {label} / {id} (err={err})"));
             }
         }
     }

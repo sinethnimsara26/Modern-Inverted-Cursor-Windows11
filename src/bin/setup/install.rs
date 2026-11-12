@@ -1,5 +1,5 @@
 use crate::ui::push_worker_update;
-use crate::{Screen, WorkerUpdate};
+use crate::{Screen, WorkerTarget, WorkerUpdate};
 use modern_inverted_cursor::{
     balanced_cursor_size, cleanup_legacy_guardian_binary, current_accessibility_step,
     export_backup, find_tray_window, normalize_win_path_str, perform_validated_restore,
@@ -246,14 +246,14 @@ pub fn execute_install_pipeline(
     startup: bool,
     register_uninstall: bool,
     sandbox_only: bool,
-    hwnd_raw: usize,
+    target: Option<&Arc<WorkerTarget>>,
     shared: Option<&Arc<Mutex<WorkerUpdate>>>,
 ) -> Result<(u32, u32), String> {
     let log = BoundedLogger::new(root.join("guardian.log"), false);
     let report = |pct: f32, stage: usize, msg: String| {
         if let Some(sh) = shared {
             push_worker_update(
-                hwnd_raw,
+                target,
                 sh,
                 WorkerUpdate {
                     pct,
@@ -426,7 +426,7 @@ pub fn start_install_worker(state: &mut crate::GuiState, is_restore: bool) {
         "Initializing installer...".into()
     };
 
-    let hwnd = state.hwnd as usize;
+    let target = Arc::clone(&state.worker_target);
     let shared = Arc::clone(&state.shared_update);
     let preset = state.preset;
     let startup = state.startup;
@@ -439,7 +439,6 @@ pub fn start_install_worker(state: &mut crate::GuiState, is_restore: bool) {
     }
 
     std::thread::spawn(move || {
-        let hwnd_raw = hwnd;
         let paths = modern_inverted_cursor::app_paths();
         let res = match paths {
             Ok((root, install_dir, backup_path)) => {
@@ -453,7 +452,7 @@ pub fn start_install_worker(state: &mut crate::GuiState, is_restore: bool) {
                         &log,
                         |pct, stage, msg| {
                             push_worker_update(
-                                hwnd_raw,
+                                Some(&target),
                                 &shared,
                                 WorkerUpdate {
                                     pct,
@@ -479,7 +478,7 @@ pub fn start_install_worker(state: &mut crate::GuiState, is_restore: bool) {
                         startup,
                         reg_un,
                         false,
-                        hwnd_raw,
+                        Some(&target),
                         Some(&shared),
                     )
                     .map(|(st, px)| (root, st, px))
@@ -491,7 +490,7 @@ pub fn start_install_worker(state: &mut crate::GuiState, is_restore: bool) {
         match res {
             Ok((root, st, px)) => {
                 push_worker_update(
-                    hwnd_raw,
+                    Some(&target),
                     &shared,
                     WorkerUpdate {
                         pct: 1.0,
@@ -508,7 +507,7 @@ pub fn start_install_worker(state: &mut crate::GuiState, is_restore: bool) {
             }
             Err(err) => {
                 push_worker_update(
-                    hwnd_raw,
+                    Some(&target),
                     &shared,
                     WorkerUpdate {
                         pct: 1.0,

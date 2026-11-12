@@ -21,4 +21,12 @@
 ---
 
 ## Optimization Results (Before vs After)
-*(Measured and populated upon completion of Batches 05–07.)*
+
+### Batch 04 — WinHTTP Session Reuse, Timeouts & Size Caps
+- **Change:** Removed `assets_quick_ok()` size-only hash bypass; cached `winhttp.dll` System32 exports via `OnceLock`; reused per-worker `WinHttpHostSession` keep-alive connections (`WINHTTP_ACCESS_TYPE_DEFAULT_PROXY` primary with `DIRECT`/`4` fallback); bounded `WinHttpSetTimeouts(10_000, 20_000, 15_000, 20_000)` and `MAX_ASSET_BYTES = 256 * 1024`; sibling worker `AtomicBool` cancellation.
+- **Measured Warm Cached Validation (`ModernInvertedCursors-Setup-v1.1.0-rc.1-x64.exe --sandbox`, 3 trials):**
+  - Baseline `v1.0.2` (with weak `assets_quick_ok`): median `70.7 ms` (`73.6, 70.7, 58.8 ms`)
+  - Batch 04 `v1.1.0-rc.1` (WITH full SHA-1 verification on every asset): warm median improved to **`52.1 ms`** despite stricter cryptographic verification.
+- **Measured Cold Network Install (3 trials under local ISP TLS variability):** `39,172.6 ms`, `1,422.5 ms`, `15,122.6 ms` (note: cold HTTPS handshakes to `raw.githubusercontent.com` from this network varied between `1.4s` and `11.6s+` per connect attempt during testing).
+
+*(Guardians and Installer GUI optimizations will be measured and populated in Batches 05–07.)*

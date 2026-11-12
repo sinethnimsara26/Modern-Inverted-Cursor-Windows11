@@ -64,3 +64,20 @@ Confirmed 14 distinct defects across baseline (`BUG-01` through `BUG-14`), inclu
 3. **Tests Executed:**
    - Added 3 new tests (`ASSETS.len() == 32`, `test_detect_and_migrate_legacy_v1_preserves_valid_backup`, `test_sync_setup_maintenance_copy_skips_same_path_and_copies_external`).
    - `build.ps1` release build + `18/18` tests passed across `x64` (`1.99.0`), `win7-win10-x64` (`1.75.0`), and `win7-win10-x86` (`1.75.0`).
+
+---
+
+## Batch 04 — Security, Integrity, FFI & Resource-Lifetime Hardening
+
+1. **Changes Implemented (`BUG-05`..`BUG-10`, `SEC-01`..`SEC-06`):**
+   - `build.rs`: fails closed (`panic!`) on release builds or explicit `GUARDIAN_EMBED_PATH` if the target Guardian PE payload is missing, `<10 KB`, or mismatches target `Machine`.
+   - `src/registry.rs`: added `load_system_dll()` (`GetModuleHandleW` -> `LOAD_LIBRARY_SEARCH_SYSTEM32` -> `GetSystemDirectoryW` explicit fallback) used by WinHTTP, DWM, DPI, and WTS loaders cleanly.
+   - `src/assets.rs`: removed `assets_quick_ok()` size-only hash bypass; cached `winhttp.dll` exports once via `OnceLock`; added `WinHttpHostSession` per-worker TLS reuse + `WinHttpSetTimeouts(10s, 20s, 15s, 20s)` + `MAX_ASSET_BYTES (256 KB)` cap + `AtomicBool` sibling cancellation on failure. Note: initial 10s connect timeout test hit a `70.9s` cold retry storm when host ISP `curl.exe -4` took `11.6s` on a single request; adjusting to `WINHTTP_ACCESS_TYPE_DEFAULT_PROXY` + `20s` connect timeout eliminated false connect-timeout retries cleanly (`39.2s, 1.42s, 15.1s`).
+   - `src/cursors.rs`: pre-loads and validates all required cursor handles via `LoadImageW` before modifying `HKCU\Control Panel\Cursors` or calling `SetSystemCursor`, rolling back via `DestroyCursor` + `reload_cursors()` on mid-apply errors.
+   - `src/ipc.rs`: replaced raw path string interpolation in `schedule_self_delete()` with `MIC_DEL_TARGET` env-var passing + `/D /Q` + `is_safe_cleanup_target()`.
+   - `src/bin/setup/`: added `WorkerTarget` (`AtomicBool` + `AtomicUsize` cleared in `WM_DESTROY`), `Backbuffer::destroy()` `old_bm` restoration before `DeleteObject`/`DeleteDC`, Setup single-instance mutex (`Local\ModernInvertedCursors_Setup_V1_Mutex`), and early `state_ptr` cleanup on window creation failure.
+2. **Tests & Verification:**
+   - Added 4 new tests (`test_verify_asset_file_rejects_same_size_tampered_bytes`, `test_load_system_dll_resolves_system32_and_blocks_fake`, `test_is_safe_cleanup_target_allows_only_expected_executables`, `test_register_and_apply_missing_dir_fails_atomically_before_mutating`).
+   - `build.rs` fail-closed test confirmed panic on invalid `GUARDIAN_EMBED_PATH`.
+   - Warm `--sandbox` improved from `70.7 ms` baseline to `52.1 ms` median (`53.8, 52.1, 51.5 ms`).
+   - `22/22` unit & integration tests passed across modern `x64` (`1.99.0`), legacy `x64` (`1.75.0`), and legacy `x86` (`1.75.0`).

@@ -134,6 +134,10 @@ extern "system" {
         dw_maximum_working_set_size: usize,
     ) -> i32;
     fn GetLocalTime(lp_system_time: *mut SystemTimeWin);
+    fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
+    fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
+    fn LoadLibraryExW(lp_lib_file_name: *const u16, h_file: *mut c_void, dw_flags: u32) -> *mut c_void;
+    fn GetSystemDirectoryW(lp_buffer: *mut u16, u_size: u32) -> u32;
 }
 
 #[link(name = "advapi32")]
@@ -191,6 +195,37 @@ pub fn wide_z(s: &str) -> Vec<u16> {
 
 pub fn hkcu() -> *mut c_void {
     (-2147483647isize) as usize as *mut c_void
+}
+
+/// Loads a Windows system DLL safely from `%SystemRoot%\System32` only (preventing
+/// CWD/application-directory DLL search-order hijacking), preferring already-loaded handles.
+pub fn load_system_dll(name: &str) -> *mut c_void {
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+    let w_name = wide_z(name);
+    // SAFETY: NUL-terminated UTF-16 DLL name passed to Win32 loader APIs.
+    unsafe {
+        let loaded = GetModuleHandleW(w_name.as_ptr());
+        if !loaded.is_null() {
+            return loaded;
+        }
+        let pinned = LoadLibraryExW(
+            w_name.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        );
+        if !pinned.is_null() {
+            return pinned;
+        }
+        // Fallback for unpatched Windows 7 without KB2533623: build explicit System32 path.
+        let mut sys_dir = vec![0u16; 260];
+        let len = GetSystemDirectoryW(sys_dir.as_mut_ptr(), sys_dir.len() as u32) as usize;
+        if len > 0 && len < sys_dir.len() {
+            let base = String::from_utf16_lossy(&sys_dir[..len]);
+            let full = wide_z(&format!("{}\\{}", base.trim_end_matches('\\'), name));
+            return LoadLibraryW(full.as_ptr());
+        }
+        std::ptr::null_mut()
+    }
 }
 
 pub fn trim_working_set() {

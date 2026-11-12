@@ -34,11 +34,42 @@ fn main() {
     println!("cargo:rerun-if-changed={}", candidate.display());
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let dest = out_dir.join("embedded_guardian.exe");
+    let is_release = env::var("PROFILE").as_deref() == Ok("release");
+    let expected_machine: Option<u16> = match target_arch.as_str() {
+        "x86_64" => Some(0x8664),
+        "aarch64" => Some(0xAA64),
+        "x86" => Some(0x014C),
+        _ => None,
+    };
 
     if candidate.is_file() {
-        fs::copy(&candidate, &dest).expect("failed to copy guardian binary into OUT_DIR");
+        let bytes = fs::read(&candidate).expect("failed to read guardian binary");
+        let pe_ok = bytes.len() > 10_000 && bytes.starts_with(b"MZ") && {
+            let off = u32::from_le_bytes([bytes[0x3C], bytes[0x3D], bytes[0x3E], bytes[0x3F]]) as usize;
+            bytes.get(off..off + 4) == Some(b"PE\0\0")
+                && expected_machine.map_or(true, |exp| {
+                    bytes.get(off + 4..off + 6) == Some(&exp.to_le_bytes())
+                })
+        };
+        if !pe_ok {
+            panic!(
+                "Guardian binary {} is invalid or mismatches target arch '{}'.",
+                candidate.display(),
+                target_arch
+            );
+        }
+        fs::write(&dest, &bytes).expect("failed to copy validated guardian binary into OUT_DIR");
+    } else if is_release || env::var_os("GUARDIAN_EMBED_PATH").is_some() {
+        panic!(
+            "Refusing to build release installer without a valid guardian payload at {}. Build ModernInvertedCursors-Guardian first (or run ./build.ps1).",
+            candidate.display()
+        );
     } else {
-        fs::write(&dest, b"").expect("failed to write placeholder embedded_guardian.exe");
+        println!(
+            "cargo:warning=Missing guardian payload at {}; debug placeholder written (test_embedded_guardian_is_nonempty_pe_binary will fail until built).",
+            candidate.display()
+        );
+        fs::write(&dest, b"").expect("failed to write debug placeholder embedded_guardian.exe");
     }
 
     // Embed explicit asInvoker + Win7-Win11 supportedOS manifest on MSVC builds so

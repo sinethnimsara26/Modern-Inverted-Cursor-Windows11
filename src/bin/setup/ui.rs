@@ -1,15 +1,19 @@
 use crate::install::{start_install_worker, GUARDIAN_EXE_BYTES};
-use crate::{ControlId, GuiState, HitZone, Screen, WorkerUpdate, TIMER_ANIM};
+use crate::{ControlId, GuiState, HitZone, Screen, WorkerTarget, WorkerUpdate, TIMER_ANIM};
 use modern_inverted_cursor::{
     balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step,
-    draw_cursor_glyph, wide_z, Preset, ACCESSIBILITY_STEPS, APP_VERSION, PACK_VERSION,
+    draw_cursor_glyph, load_system_dll, wide_z, Preset, ACCESSIBILITY_STEPS, APP_VERSION,
+    PACK_VERSION,
 };
 use std::{
     ffi::c_void,
     fs,
     path::{Path, PathBuf},
     ptr::{null, null_mut},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 const WND_CLASS: &str = "ModernInvertedDarkSetupWnd";
@@ -157,8 +161,14 @@ pub struct BitmapInfoHeader {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
-    fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
+    pub fn CreateMutexW(
+        lp_mutex_attributes: *mut c_void,
+        b_initial_owner: i32,
+        lp_name: *const u16,
+    ) -> *mut c_void;
+    pub fn GetLastError() -> u32;
+    pub fn CloseHandle(h_object: *mut c_void) -> i32;
 }
 
 #[link(name = "user32")]
@@ -234,6 +244,8 @@ extern "system" {
         format: u32,
     ) -> i32;
     pub fn DestroyIcon(h_icon: *mut c_void) -> i32;
+    pub fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> *mut c_void;
+    pub fn SetForegroundWindow(h_wnd: *mut c_void) -> i32;
     pub fn MessageBoxW(
         h_wnd: *mut c_void,
         lp_text: *const u16,
@@ -316,7 +328,7 @@ extern "system" {
 }
 
 unsafe fn enable_per_monitor_dpi_v2() {
-    let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
+    let u32_mod = load_system_dll("user32.dll");
     if !u32_mod.is_null() {
         type SetDpiCtxFn = unsafe extern "system" fn(isize) -> i32;
         let p = GetProcAddress(u32_mod, b"SetProcessDpiAwarenessContext\0".as_ptr());
@@ -327,7 +339,7 @@ unsafe fn enable_per_monitor_dpi_v2() {
             }
         }
     }
-    let shcore = LoadLibraryW(wide_z("shcore.dll").as_ptr());
+    let shcore = load_system_dll("shcore.dll");
     if !shcore.is_null() {
         type SetDpiAwarenessFn = unsafe extern "system" fn(i32) -> i32;
         let p = GetProcAddress(shcore, b"SetProcessDpiAwareness\0".as_ptr());
@@ -350,7 +362,7 @@ unsafe fn enable_per_monitor_dpi_v2() {
 
 unsafe fn window_dpi(hwnd: *mut c_void) -> u32 {
     if !hwnd.is_null() {
-        let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
+        let u32_mod = load_system_dll("user32.dll");
         if !u32_mod.is_null() {
             type GetDpiFn = unsafe extern "system" fn(*mut c_void) -> u32;
             let p = GetProcAddress(u32_mod, b"GetDpiForWindow\0".as_ptr());
@@ -375,7 +387,7 @@ unsafe fn window_dpi(hwnd: *mut c_void) -> u32 {
 }
 
 unsafe fn adjust_rect_for_dpi(rc: &mut Rect, style: u32, dpi: u32) {
-    let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
+    let u32_mod = load_system_dll("user32.dll");
     if !u32_mod.is_null() {
         type AdjDpiFn = unsafe extern "system" fn(*mut Rect, u32, i32, u32, u32) -> i32;
         let p = GetProcAddress(u32_mod, b"AdjustWindowRectExForDpi\0".as_ptr());
@@ -390,7 +402,7 @@ unsafe fn adjust_rect_for_dpi(rc: &mut Rect, style: u32, dpi: u32) {
 }
 
 unsafe fn apply_dwm_dark_chrome(hwnd: *mut c_void) -> bool {
-    let dwm = LoadLibraryW(wide_z("dwmapi.dll").as_ptr());
+    let dwm = load_system_dll("dwmapi.dll");
     if dwm.is_null() {
         return false;
     }
@@ -638,6 +650,7 @@ impl FontSet {
 pub struct Backbuffer {
     pub hdc: *mut c_void,
     pub hbm: *mut c_void,
+    pub old_bm: *mut c_void,
     pub bits: *mut u32,
     pub w: usize,
     pub h: usize,
@@ -668,10 +681,11 @@ impl Backbuffer {
             DeleteDC(hdc);
             return None;
         }
-        SelectObject(hdc, hbm);
+        let old_bm = SelectObject(hdc, hbm);
         Some(Self {
             hdc,
             hbm,
+            old_bm,
             bits: raw as *mut u32,
             w,
             h,
@@ -683,13 +697,17 @@ impl Backbuffer {
     }
 
     pub unsafe fn destroy(&mut self) {
-        if !self.hdc.is_null() {
-            DeleteDC(self.hdc);
-            self.hdc = null_mut();
+        if !self.hdc.is_null() && !self.old_bm.is_null() {
+            SelectObject(self.hdc, self.old_bm);
+            self.old_bm = null_mut();
         }
         if !self.hbm.is_null() {
             DeleteObject(self.hbm);
             self.hbm = null_mut();
+        }
+        if !self.hdc.is_null() {
+            DeleteDC(self.hdc);
+            self.hdc = null_mut();
         }
     }
 }
@@ -1776,13 +1794,23 @@ pub fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), Strin
     fs::write(out_path, &bmp).map_err(|e| format!("write bmp failed: {e}"))
 }
 
-pub fn push_worker_update(hwnd_raw: usize, shared: &Arc<Mutex<WorkerUpdate>>, u: WorkerUpdate) {
+pub fn push_worker_update(
+    target: Option<&Arc<WorkerTarget>>,
+    shared: &Arc<Mutex<WorkerUpdate>>,
+    u: WorkerUpdate,
+) {
     if let Ok(mut guard) = shared.lock() {
         *guard = u;
     }
-    if hwnd_raw != 0 {
-        unsafe {
-            PostMessageW(hwnd_raw as *mut c_void, WM_APP_WORKER_UPDATE, 0, 0);
+    if let Some(t) = target {
+        if t.alive.load(Ordering::Acquire) {
+            let hwnd = t.hwnd.load(Ordering::Acquire);
+            if hwnd != 0 {
+                // SAFETY: `t.alive` is cleared in `WM_DESTROY` before `hwnd` becomes invalid.
+                unsafe {
+                    PostMessageW(hwnd as *mut c_void, WM_APP_WORKER_UPDATE, 0, 0);
+                }
+            }
         }
     }
 }
@@ -1803,6 +1831,12 @@ unsafe extern "system" fn wnd_proc(
     l_param: isize,
 ) -> isize {
     if msg == WM_DESTROY {
+        let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GuiState;
+        if !p.is_null() {
+            let state = &*p;
+            state.worker_target.alive.store(false, Ordering::Release);
+            state.worker_target.hwnd.store(0, Ordering::Release);
+        }
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         PostQuitMessage(0);
         return 0;
@@ -2075,9 +2109,12 @@ pub fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut 
         }
 
         let dpi = window_dpi(hwnd);
-        (*state_ptr).hwnd = hwnd;
-        (*state_ptr).dpi = dpi;
-        (*state_ptr).fonts = FontSet::create(dpi);
+        let st = &mut *state_ptr;
+        st.hwnd = hwnd;
+        st.worker_target.hwnd.store(hwnd as usize, Ordering::Release);
+        st.worker_target.alive.store(true, Ordering::Release);
+        st.dpi = dpi;
+        st.fonts = FontSet::create(dpi);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
 
         let _ = apply_dwm_dark_chrome(hwnd);
@@ -2152,6 +2189,10 @@ pub fn new_gui_state(
         worker_error: None,
         is_restore: false,
         install_root,
+        worker_target: Arc::new(WorkerTarget {
+            alive: AtomicBool::new(false),
+            hwnd: std::sync::atomic::AtomicUsize::new(0),
+        }),
         shared_update: Arc::new(Mutex::new(WorkerUpdate {
             pct: 0.0,
             stage: 0,
@@ -2167,6 +2208,19 @@ pub fn new_gui_state(
         backbuffer: None,
         app_icon: create_split_cursor_hicon(32, Preset::Regular, false),
     }))
+}
+
+pub fn bring_existing_setup_to_front() -> bool {
+    let cls = wide_z(WND_CLASS);
+    // SAFETY: NUL-terminated class name passed to `FindWindowW` and `SetForegroundWindow`.
+    unsafe {
+        let existing = FindWindowW(cls.as_ptr(), null());
+        if !existing.is_null() {
+            SetForegroundWindow(existing);
+            return true;
+        }
+    }
+    false
 }
 
 pub fn run_smoke_ui(out_dir: &Path) -> Result<(), String> {

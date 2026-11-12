@@ -17,11 +17,15 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     ptr::null_mut,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize},
+        Arc, Mutex,
+    },
 };
 use ui::{
-    create_setup_window, new_gui_state, run_smoke_ui, Backbuffer, DestroyIcon, DispatchMessageW,
-    FontSet, GetMessageW, MessageBoxW, Msg, Rect, TranslateMessage,
+    bring_existing_setup_to_front, create_setup_window, new_gui_state, run_smoke_ui, Backbuffer,
+    CloseHandle, CreateMutexW, DestroyIcon, DispatchMessageW, FontSet, GetLastError, GetMessageW,
+    MessageBoxW, Msg, Rect, TranslateMessage,
 };
 
 pub const TIMER_ANIM: usize = 1;
@@ -63,6 +67,11 @@ pub struct WorkerUpdate {
     pub install_root: PathBuf,
 }
 
+pub struct WorkerTarget {
+    pub alive: AtomicBool,
+    pub hwnd: AtomicUsize,
+}
+
 pub struct GuiState {
     pub hwnd: *mut c_void,
     pub dpi: u32,
@@ -85,6 +94,7 @@ pub struct GuiState {
     pub worker_error: Option<String>,
     pub is_restore: bool,
     pub install_root: PathBuf,
+    pub worker_target: Arc<WorkerTarget>,
     pub shared_update: Arc<Mutex<WorkerUpdate>>,
     pub fonts: FontSet,
     pub backbuffer: Option<Backbuffer>,
@@ -133,7 +143,7 @@ fn run() -> Result<(), String> {
             false,
             false,
             true,
-            0,
+            None,
             None,
         )?;
         let report = format!(
@@ -220,9 +230,19 @@ fn run() -> Result<(), String> {
             !no_startup,
             true,
             false,
-            0,
+            None,
             None,
         )?;
+        return Ok(());
+    }
+
+    let setup_mutex_name = wide_z("Local\\ModernInvertedCursors_Setup_V1_Mutex");
+    let setup_mutex = unsafe { CreateMutexW(null_mut(), 0, setup_mutex_name.as_ptr()) };
+    if !setup_mutex.is_null() && unsafe { GetLastError() } == 183 {
+        let _ = bring_existing_setup_to_front();
+        unsafe {
+            CloseHandle(setup_mutex);
+        }
         return Ok(());
     }
 
@@ -233,7 +253,22 @@ fn run() -> Result<(), String> {
     let initial_preset = parse_preset_arg(&args)?.unwrap_or_else(load_saved_preset);
 
     let state_ptr = new_gui_state(initial_preset, true, true, has_existing, is_modify, root);
-    let hwnd = create_setup_window(state_ptr, true)?;
+    let hwnd = match create_setup_window(state_ptr, true) {
+        Ok(h) => h,
+        Err(err) => {
+            unsafe {
+                let mut state = Box::from_raw(state_ptr);
+                if !state.app_icon.is_null() {
+                    DestroyIcon(state.app_icon);
+                }
+                let _ = &mut state;
+                if !setup_mutex.is_null() {
+                    CloseHandle(setup_mutex);
+                }
+            }
+            return Err(err);
+        }
+    };
 
     unsafe {
         let mut msg: Msg = std::mem::zeroed();
@@ -249,6 +284,9 @@ fn run() -> Result<(), String> {
         state.fonts.destroy();
         if !state.app_icon.is_null() {
             DestroyIcon(state.app_icon);
+        }
+        if !setup_mutex.is_null() {
+            CloseHandle(setup_mutex);
         }
         let _ = hwnd;
     }

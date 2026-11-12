@@ -42,3 +42,21 @@ Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated
   - `ModernInvertedCursors-Setup-v1.1.0-rc.1-x64.exe` (`675,840 B`), `ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe` (`298,496 B`)
   - `ModernInvertedCursors-Setup-v1.1.0-rc.1-win7-win10-x64.exe`, `ModernInvertedCursors-Guardian-v1.1.0-rc.1-win7-win10-x64.exe`
   - `ModernInvertedCursors-Setup-v1.1.0-rc.1-win7-win10-x86.exe` (`798,208 B`), `ModernInvertedCursors-Guardian-v1.1.0-rc.1-win7-win10-x86.exe` (`363,008 B`)
+
+---
+
+## Batch 04 Test Evidence (`v1.1.0-rc.1` Security & Reliability Hardening)
+
+- **`x64` (`1.99.0`):** `build.ps1 -Arch x64 -Suffix x64` -> **`22/22 PASSED`** (`16` lib + `1` guardian + `5` setup).
+  - Setup `684,544 B`, Guardian `299,520 B`.
+- **`win7-win10-x64` (`1.75.0`):** `build.ps1 -Arch win7-win10-x64 -Toolchain 1.75.0 -Target x86_64-pc-windows-msvc -Suffix win7-win10-x64 -StaticCrt` -> **`22/22 PASSED`**.
+  - Setup `908,288 B`, Guardian `411,136 B`.
+- **`win7-win10-x86` (`1.75.0`):** `build.ps1 -Arch win7-win10-x86 -Toolchain 1.75.0 -Target i686-pc-windows-msvc -Suffix win7-win10-x86 -StaticCrt` -> **`22/22 PASSED`**.
+  - Setup `806,912 B`, Guardian `365,056 B`.
+- **Batch 04 Regression & Security Tests:**
+  - `test_load_system_dll_resolves_system32_and_blocks_fake` (DLL planting defense via `System32` pinning)
+  - `test_verify_asset_file_rejects_same_size_tampered_bytes` (full Git blob SHA-1 enforcement; `assets_quick_ok` bypass removed)
+  - `test_register_and_apply_missing_dir_fails_atomically_before_mutating` (pre-validation atomic cursor apply)
+  - `test_is_safe_cleanup_target_allows_only_expected_executables` (safe self-delete target gating)
+  - `build.rs` fail-closed check verified: `cargo build --release` panicked on nonexistent `GUARDIAN_EMBED_PATH` instead of embedding an empty payload.
+- **PE Import Table Audit (`dumpbin /IMPORTS`):** Verified `win7-win10-x64` and `win7-win10-x86` import only `KERNEL32.dll`, `USER32.dll`, `GDI32.dll`, `SHELL32.dll`, `ADVAPI32.dll`, `bcrypt.dll`, and `ntdll.dll` (zero `VCRUNTIME140.dll`, zero `api-ms-win-crt-*`, zero `api-ms-win-core-synch-*`).

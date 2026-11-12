@@ -8,8 +8,8 @@ pub mod registry;
 pub mod render;
 
 pub use assets::{
-    assets_quick_ok, download_asset, ensure_all_assets, git_blob_sha1, parse_https_url,
-    prepare_assets_parallel, sha1, verify_asset_file, Asset, ASSETS, REPO_RAW,
+    download_asset, ensure_all_assets, git_blob_sha1, parse_https_url, prepare_assets_parallel,
+    sha1, verify_asset_file, Asset, ASSETS, MAX_ASSET_BYTES, REPO_RAW,
 };
 pub use backup::{
     export_backup, parse_reg_file_text, perform_validated_restore, reset_windows_default_cursors,
@@ -21,16 +21,16 @@ pub use cursors::{
 };
 pub use ipc::{
     close_existing_v6_window, find_tray_window, find_verified_guardian_pids,
-    is_guardian_image_path, normalize_win_path_str, process_image_path, read_log_tail,
-    schedule_self_delete, stop_targeted_guardians, window_process_id, write_binary_retry,
-    NamedReadyEvent, ProcessEntry32W, ReadyWaitOutcome,
+    is_guardian_image_path, is_safe_cleanup_target, normalize_win_path_str, process_image_path,
+    read_log_tail, schedule_self_delete, stop_targeted_guardians, window_process_id,
+    write_binary_retry, NamedReadyEvent, ProcessEntry32W, ReadyWaitOutcome,
 };
 pub use registry::{
     app_paths, app_paths_for_root, cleanup_legacy_guardian_binary, detect_existing_installation,
-    hkcu, is_startup_enabled, load_saved_preset, parse_preset_arg, reg_delete_subkey,
-    reg_delete_value, reg_get_dword, reg_get_string, reg_open_notify, reg_set_dword,
-    reg_set_string, register_uninstall_entry, save_preset, set_startup_enabled, trim_working_set,
-    unregister_uninstall_entry, wide_z, BoundedLogger, InstallDetection, Preset,
+    hkcu, is_startup_enabled, load_saved_preset, load_system_dll, parse_preset_arg,
+    reg_delete_subkey, reg_delete_value, reg_get_dword, reg_get_string, reg_open_notify,
+    reg_set_dword, reg_set_string, register_uninstall_entry, save_preset, set_startup_enabled,
+    trim_working_set, unregister_uninstall_entry, wide_z, BoundedLogger, InstallDetection, Preset,
     RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_SUBKEY, APP_VERSION, CONFIG_SUBKEY,
     CREATE_NO_WINDOW, CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE,
     LEGACY_GUARDIAN_EXE_NAME, LEGACY_GUARDIAN_RUN_VALUE, PACK_VERSION, PUBLISHER, RUN_SUBKEY,
@@ -235,5 +235,50 @@ mod tests {
         assert!(!legacy_guard.exists());
         assert!(backup.exists(), "valid backup must remain intact across migration");
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_verify_asset_file_rejects_same_size_tampered_bytes() {
+        let tmp = env::temp_dir().join("mic-test-hash-bypass");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let asset = ASSETS[0];
+        let fake_file = tmp.join(asset.name);
+        // Exact same byte size as `arrow.cur`, completely different bytes.
+        fs::write(&fake_file, vec![0xAAu8; asset.size as usize]).unwrap();
+        let err = verify_asset_file(asset, &fake_file).unwrap_err();
+        assert!(err.contains("Git blob SHA-1 check"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_system_dll_resolves_system32_and_blocks_fake() {
+        assert!(!load_system_dll("kernel32.dll").is_null());
+        assert!(!load_system_dll("winhttp.dll").is_null());
+        assert!(load_system_dll("definitely_missing_fake_module_12345.dll").is_null());
+    }
+
+    #[test]
+    fn test_is_safe_cleanup_target_allows_only_expected_executables() {
+        assert!(is_safe_cleanup_target(Path::new(
+            r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\ModernInvertedCursors-Setup.exe"
+        )));
+        assert!(is_safe_cleanup_target(Path::new(
+            r"C:\Users\a&b\AppData\Local\ModernInvertedCursors\ModernInvertedCursors-Setup.exe"
+        )));
+        assert!(!is_safe_cleanup_target(Path::new(
+            r"C:\Windows\System32\cmd.exe"
+        )));
+        assert!(!is_safe_cleanup_target(Path::new(
+            r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\backup-original.reg"
+        )));
+    }
+
+    #[test]
+    fn test_register_and_apply_missing_dir_fails_atomically_before_mutating() {
+        let missing_dir = env::temp_dir().join("mic-test-missing-cursors-dir-never-exists");
+        let _ = fs::remove_dir_all(&missing_dir);
+        let err = register_and_apply(Preset::Compact, &missing_dir, None).unwrap_err();
+        assert!(err.contains("LoadImageW failed"));
     }
 }

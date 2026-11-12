@@ -379,14 +379,27 @@ pub fn write_binary_retry(dest: &Path, bytes: &[u8]) -> Result<(), String> {
     ))
 }
 
+pub fn is_safe_cleanup_target(path: &Path) -> bool {
+    let norm = normalize_win_path_str(path);
+    norm.ends_with(".exe")
+        && (norm.contains("moderninvertedcursors") || norm.contains("mic-test-"))
+}
+
+/// Schedules deletion of the running executable after process exit without interpolating
+/// user paths into shell command strings (path passes purely via environment variable).
 pub fn schedule_self_delete(path: &Path) {
-    let cmd = format!(
-        "ping -n 2 127.0.0.1 >nul & del /f /q \"{}\"",
-        path.display()
-    );
+    if !is_safe_cleanup_target(path) {
+        return;
+    }
     let _ = Command::new("cmd.exe")
         .creation_flags(CREATE_NO_WINDOW)
-        .args(["/C", &cmd])
+        .env("MIC_DEL_TARGET", path.as_os_str())
+        .args([
+            "/D",
+            "/Q",
+            "/C",
+            "ping -n 2 127.0.0.1 >nul & del /f /q \"%MIC_DEL_TARGET%\"",
+        ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();

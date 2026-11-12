@@ -2,7 +2,7 @@
 
 use modern_inverted_cursor::{
     app_paths, balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step,
-    ensure_all_assets, is_startup_enabled, load_saved_preset, parse_preset_arg,
+    ensure_all_assets, is_startup_enabled, load_saved_preset, load_system_dll, parse_preset_arg,
     perform_validated_restore, reg_delete_value, reg_get_string, reg_open_notify, reg_set_dword,
     reg_set_string, save_preset, set_startup_enabled, stop_targeted_guardians, trim_working_set, wide_z, BoundedLogger, NamedReadyEvent, Preset,
     RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION,
@@ -158,9 +158,7 @@ struct NotifyIconDataW {
 extern "system" {
     fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
     fn GetLastError() -> u32;
-    fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
-    fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
     fn CreateMutexW(
         lp_mutex_attributes: *mut c_void,
         b_initial_owner: i32,
@@ -286,7 +284,7 @@ extern "system" {
 unsafe fn wts_session_notify(hwnd: *mut c_void, register: bool) {
     let lib_name = wide_z("wtsapi32.dll");
     if register {
-        let module = LoadLibraryW(lib_name.as_ptr());
+        let module = load_system_dll("wtsapi32.dll");
         if module.is_null() {
             return;
         }
@@ -295,8 +293,6 @@ unsafe fn wts_session_notify(hwnd: *mut c_void, register: bool) {
         if !proc.is_null() {
             let f: RegisterFn = std::mem::transmute(proc);
             let _ = f(hwnd, NOTIFY_FOR_THIS_SESSION);
-        } else {
-            FreeLibrary(module);
         }
     } else {
         let module = GetModuleHandleW(lib_name.as_ptr());
@@ -309,7 +305,6 @@ unsafe fn wts_session_notify(hwnd: *mut c_void, register: bool) {
             let f: UnregisterFn = std::mem::transmute(proc);
             let _ = f(hwnd);
         }
-        FreeLibrary(module);
     }
 }
 
