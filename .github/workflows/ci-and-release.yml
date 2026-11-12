@@ -2,7 +2,7 @@ name: CI & Multi-Arch Release Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, "hardening/**"]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -74,8 +74,8 @@ jobs:
       - name: Verify PE architecture (${{ matrix.expected_machine }}) & GUI subsystem
         shell: pwsh
         run: |
-          $setupExe = Get-ChildItem dist -Filter "ModernInvertedSetup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1
-          $guardExe = Get-Item "dist\ModernInvertedCursorGuardian-${{ matrix.suffix }}.exe"
+          $setupExe = Get-ChildItem dist -Filter "ModernInvertedCursors-Setup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1
+          $guardExe = Get-ChildItem dist -Filter "ModernInvertedCursors-Guardian-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1
           $exes = @($setupExe, $guardExe)
           foreach ($f in $exes) {
             if ($null -eq $f) { throw "Missing expected EXE for ${{ matrix.suffix }}" }
@@ -95,7 +95,7 @@ jobs:
         run: |
           $dumpbin = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio" -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           if (-not $dumpbin) { throw "dumpbin.exe not found on runner" }
-          foreach ($pat in @("ModernInvertedSetup-v*-${{ matrix.suffix }}.exe", "ModernInvertedCursorGuardian-${{ matrix.suffix }}.exe")) {
+          foreach ($pat in @("ModernInvertedCursors-Setup-v*-${{ matrix.suffix }}.exe", "ModernInvertedCursors-Guardian-v*-${{ matrix.suffix }}.exe")) {
             $exe = Get-ChildItem dist -Filter $pat | Select-Object -First 1 -ExpandProperty FullName
             $imps = & $dumpbin /IMPORTS $exe | Select-String "\.dll$" | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique
             Write-Host "$exe imports: $($imps -join ', ')"
@@ -106,7 +106,7 @@ jobs:
       - name: Verify Dark-Mode Setup UI smoke rendering (${{ matrix.suffix }})
         shell: pwsh
         run: |
-          $setupExe = Get-ChildItem dist -Filter "ModernInvertedSetup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1 -ExpandProperty FullName
+          $setupExe = Get-ChildItem dist -Filter "ModernInvertedCursors-Setup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1 -ExpandProperty FullName
           $smoke = "$env:RUNNER_TEMP\smoke_ui_${{ matrix.suffix }}"
           Start-Process -FilePath $setupExe -ArgumentList "--smoke-ui", $smoke -Wait
           if (!(Test-Path "$smoke\01_setup_dark.bmp")) { throw "Missing setup UI smoke screenshot" }
@@ -118,7 +118,7 @@ jobs:
         if: matrix.static_crt == true
         shell: pwsh
         run: |
-          $setupExe = Get-ChildItem dist -Filter "ModernInvertedSetup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1 -ExpandProperty FullName
+          $setupExe = Get-ChildItem dist -Filter "ModernInvertedCursors-Setup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1 -ExpandProperty FullName
           $sand = "$env:RUNNER_TEMP\sandbox_${{ matrix.suffix }}"
           Start-Process -FilePath $setupExe -ArgumentList "--sandbox", $sand, "--preset", "compact" -Wait
           if (!(Test-Path "$sand\sandbox-report.txt")) { throw "Missing sandbox-report.txt" }
@@ -129,8 +129,8 @@ jobs:
         with:
           name: binaries-${{ matrix.suffix }}
           path: |
-            dist/ModernInvertedSetup-v*-${{ matrix.suffix }}.exe
-            dist/ModernInvertedCursorGuardian-${{ matrix.suffix }}.exe
+            dist/ModernInvertedCursors-Setup-v*-${{ matrix.suffix }}.exe
+            dist/ModernInvertedCursors-Guardian-v*-${{ matrix.suffix }}.exe
           if-no-files-found: error
 
   publish-release:
@@ -157,25 +157,29 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
+          PRERELEASE_FLAG=""
+          TITLE_SUFFIX="Setup & Tray Guardian"
+          if [[ "$TAG" == *"-"* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+            TITLE_SUFFIX="Setup & Tray Guardian (Release Candidate)"
+          fi
+
           cat <<EOF > release_notes.md
           ## Modern Inverted Cursors — Windows 7–11 (x64, ARM64 & Legacy x64/x86)
 
           **100% Free and Open Source Software (FOSS • MIT License)** — everyone is welcome to use, tweak, fork, and build their own versions! If you run into any bugs, Windows quirks, or ideas, please open an [Issue](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues) or Pull Request.
 
-          > **Release Note (\`$TAG\` under the \`v1.0.x\` First Release Series):** Builds upon \`v1.0.0\` (x64) and \`v1.0.1\` (x64 + ARM64) by adding **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (x64 & 32-bit x86)** installers and tray guardians compiled with **Rust \`1.75.0\` + static CRT (\`+crt-static\`)**, native **WinHTTP TLS 1.2** downloads (no \`curl.exe\` dependency), and dynamic Vista–Win11 DPI/theme fallbacks — zero VC++ Redistributable required. Future updates may follow as we discover new bugs or edge cases.
-
-          ### Downloads
-          - **Modern Windows 10 & 11 (x64 Intel/AMD):** \`ModernInvertedSetup-$TAG-x64.exe\`
-          - **Modern Windows 11 (ARM64 Snapdragon):** \`ModernInvertedSetup-$TAG-arm64.exe\` *(built & tested natively on \`windows-11-arm\`)*
-          - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (x64):** \`ModernInvertedSetup-$TAG-win7-win10-x64.exe\`
-          - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (32-bit x86):** \`ModernInvertedSetup-$TAG-win7-win10-x86.exe\`
-          - **Standalone Guardians:** \`ModernInvertedCursorGuardian-x64.exe\`, \`ModernInvertedCursorGuardian-arm64.exe\`, \`ModernInvertedCursorGuardian-win7-win10-x64.exe\`, \`ModernInvertedCursorGuardian-win7-win10-x86.exe\`
+          ### Downloads (\`$TAG\`)
+          - **Modern Windows 10 & 11 (x64 Intel/AMD):** \`ModernInvertedCursors-Setup-$TAG-x64.exe\` (standalone guardian: \`ModernInvertedCursors-Guardian-$TAG-x64.exe\`)
+          - **Modern Windows 11 (ARM64 Snapdragon):** \`ModernInvertedCursors-Setup-$TAG-arm64.exe\` (standalone guardian: \`ModernInvertedCursors-Guardian-$TAG-arm64.exe\`)
+          - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (x64):** \`ModernInvertedCursors-Setup-$TAG-win7-win10-x64.exe\` (standalone guardian: \`ModernInvertedCursors-Guardian-$TAG-win7-win10-x64.exe\`)
+          - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (32-bit x86):** \`ModernInvertedCursors-Setup-$TAG-win7-win10-x86.exe\` (standalone guardian: \`ModernInvertedCursors-Guardian-$TAG-win7-win10-x86.exe\`)
           - **Checksums:** \`SHA256SUMS.txt\`
           EOF
 
           if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" release-assets/* --clobber --repo "$GH_REPO"
-            gh release edit "$TAG" --repo "$GH_REPO" --title "$TAG — Windows 7–11 (x64, ARM64 & Legacy) Setup & Tray Guardian" --notes-file release_notes.md
+            gh release edit "$TAG" $PRERELEASE_FLAG --repo "$GH_REPO" --title "$TAG — Windows 7–11 $TITLE_SUFFIX" --notes-file release_notes.md
           else
-            gh release create "$TAG" release-assets/* --repo "$GH_REPO" --title "$TAG — Windows 7–11 (x64, ARM64 & Legacy) Setup & Tray Guardian" --notes-file release_notes.md
+            gh release create "$TAG" release-assets/* $PRERELEASE_FLAG --repo "$GH_REPO" --title "$TAG — Windows 7–11 $TITLE_SUFFIX" --notes-file release_notes.md
           fi

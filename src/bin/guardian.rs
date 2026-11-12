@@ -4,18 +4,17 @@ use modern_inverted_cursor::{
     app_paths, balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step,
     ensure_all_assets, is_startup_enabled, load_saved_preset, parse_preset_arg,
     perform_validated_restore, reg_delete_value, reg_get_string, reg_open_notify, reg_set_dword,
-    reg_set_string, save_preset, schedule_self_delete, set_startup_enabled,
-    stop_targeted_guardians, trim_working_set, unregister_uninstall_entry, wide_z,
-    BoundedLogger, NamedReadyEvent, Preset, RegCloseKey, RegNotifyChangeKeyValue,
-    ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION, CONFIG_SUBKEY, CURSORS_SUBKEY,
-    GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY, TRAY_WND_CLASS,
+    reg_set_string, save_preset, set_startup_enabled, stop_targeted_guardians, trim_working_set, wide_z, BoundedLogger, NamedReadyEvent, Preset,
+    RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION,
+    CONFIG_SUBKEY, CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
+    SETUP_EXE_NAME, TRAY_WND_CLASS,
 };
 
 use std::{
     env,
     ffi::c_void,
-    fs,
     path::{Path, PathBuf},
+    process::Command,
     ptr::{null, null_mut},
 };
 
@@ -94,9 +93,10 @@ const CMD_PRESET_NO_TAIL: usize = 1011;
 const CMD_PRESET_DETACHED: usize = 1012;
 const CMD_PRESET_COMPACT: usize = 1013;
 const CMD_STARTUP: usize = 1020;
-const CMD_OPEN_FOLDER: usize = 1021;
-const CMD_VIEW_LOG: usize = 1022;
-const CMD_RESTORE: usize = 1023;
+const CMD_OPEN_SETUP: usize = 1021;
+const CMD_OPEN_FOLDER: usize = 1022;
+const CMD_VIEW_LOG: usize = 1023;
+const CMD_RESTORE: usize = 1024;
 const CMD_EXIT: usize = 1099;
 
 const REG_NOTIFY_CHANGE_LAST_SET: u32 = 0x0000_0004;
@@ -484,6 +484,7 @@ fn run_popup_menu(
         "Start at Windows Sign-in",
     );
     append_menu_str(hmenu, MF_SEPARATOR, 0, "");
+    append_menu_str(hmenu, MF_STRING, CMD_OPEN_SETUP, "Open Setup & Maintenance...");
     append_menu_str(hmenu, MF_STRING, CMD_OPEN_FOLDER, "Open Install Folder");
     append_menu_str(hmenu, MF_STRING, CMD_VIEW_LOG, "View Guardian Log");
     append_menu_str(hmenu, MF_STRING, CMD_RESTORE, "Restore Original Cursors...");
@@ -519,6 +520,16 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
     }
 
     if cmd == CMD_RESTORE {
+        let setup_exe = {
+            let state = unsafe { &*ptr };
+            state.root.join(SETUP_EXE_NAME)
+        };
+        if setup_exe.is_file() {
+            if let Err(err) = Command::new(&setup_exe).arg("--uninstall").spawn() {
+                show_error_box(hwnd, &format!("Could not launch {}: {err}", setup_exe.display()));
+            }
+            return;
+        }
         let title = wide_z("Modern Inverted Cursors");
         let msg = wide_z(
             "Restore your original Windows cursors, disable startup launch, and exit the tray guardian?",
@@ -542,7 +553,6 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
                     || {
                         reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
                         reg_delete_value(CONFIG_SUBKEY, "Preset");
-                        unregister_uninstall_entry();
                         Ok(())
                     },
                 );
@@ -602,6 +612,16 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
                 } else {
                     "Startup at sign-in disabled."
                 });
+            }
+        }
+        CMD_OPEN_SETUP => {
+            let setup_exe = state.root.join(SETUP_EXE_NAME);
+            if setup_exe.is_file() {
+                if let Err(err) = Command::new(&setup_exe).arg("--modify").spawn() {
+                    show_error_box(hwnd, &format!("Could not launch {}: {err}", setup_exe.display()));
+                }
+            } else {
+                open_shell_path(hwnd, &state.root);
             }
         }
         CMD_OPEN_FOLDER => open_shell_path(hwnd, &state.root),
@@ -760,48 +780,6 @@ unsafe extern "system" fn wnd_proc(
     DefWindowProcW(hwnd, msg, w_param, l_param)
 }
 
-fn perform_uninstall(
-    root: &Path,
-    install_dir: &Path,
-    backup_path: &Path,
-    log: &BoundedLogger,
-) -> Result<(), String> {
-    let title = wide_z("Uninstall Modern Inverted Cursors");
-    let prompt = wide_z(
-        "Restore your original Windows cursors, disable startup launch, and uninstall Modern Inverted Cursors?",
-    );
-    let ans = unsafe {
-        MessageBoxW(
-            null_mut(),
-            prompt.as_ptr(),
-            title.as_ptr(),
-            MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND,
-        )
-    };
-    if ans != IDYES {
-        return Ok(());
-    }
-
-    perform_validated_restore(
-        backup_path,
-        Some(log),
-        || stop_targeted_guardians(root, Some(log)),
-        || {
-            reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-            reg_delete_value(CONFIG_SUBKEY, "Preset");
-            unregister_uninstall_entry();
-            if install_dir.exists() {
-                let _ = fs::remove_dir_all(install_dir);
-            }
-            let guardian_exe = root.join(GUARDIAN_EXE_NAME);
-            if guardian_exe.exists() {
-                schedule_self_delete(&guardian_exe);
-            }
-            Ok(())
-        },
-    )
-}
-
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
     for i in 0..args.len() {
         if args[i] == flag {
@@ -822,24 +800,6 @@ fn run() -> Result<(), String> {
     if args.iter().any(|a| a == "--quit") {
         stop_targeted_guardians(&root, Some(&log))?;
         return Ok(());
-    }
-
-    if args.iter().any(|a| a == "--uninstall") {
-        return perform_uninstall(&root, &install_dir, &backup_path, &log);
-    }
-
-    if args.iter().any(|a| a == "--restore") {
-        return perform_validated_restore(
-            &backup_path,
-            Some(&log),
-            || stop_targeted_guardians(&root, Some(&log)),
-            || {
-                reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-                reg_delete_value(CONFIG_SUBKEY, "Preset");
-                unregister_uninstall_entry();
-                Ok(())
-            },
-        );
     }
 
     if args.iter().any(|a| a == "--replace") {

@@ -1,8 +1,8 @@
 [package]
 name = "modern-inverted-cursor"
-version = "1.0.2"
+version = "1.1.0-rc.1"
 edition = "2021"
-description = "Pure-Rust Windows 7–11 Dark Mode installer and ultra-lightweight system-tray guardian for Modern Inverted Mouse Cursors v3.6.2 (x64, ARM64, and Legacy Win7–Win10 x64/x86)"
+description = "Pure-Rust Windows 7–11 Dark Mode installer, maintenance tool, and event-driven system-tray guardian for Modern Inverted Mouse Cursors v3.6.2 (x64, ARM64, and Legacy Win7–Win10 x64/x86)"
 license = "MIT"
 
 [lib]
@@ -10,12 +10,12 @@ name = "modern_inverted_cursor"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ModernInvertedCursorGuardian"
+name = "ModernInvertedCursors-Guardian"
 path = "src/bin/guardian.rs"
 
 [[bin]]
-name = "ModernInvertedSetup"
-path = "src/bin/setup.rs"
+name = "ModernInvertedCursors-Setup"
+path = "src/bin/setup/main.rs"
 
 [dependencies]
 

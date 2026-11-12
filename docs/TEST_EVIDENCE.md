@@ -30,3 +30,15 @@ Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated
 - `cargo +1.75.0 test --target x86_64-pc-windows-msvc`: **`16/16 PASSED`**
 - `cargo +1.75.0 test --target i686-pc-windows-msvc`: **`16/16 PASSED`**
 - Verified behavior covers `BUG-01` (`test_verify_child_readiness_detects_crash_and_timeout`, `test_named_ready_event_detects_early_exit_and_timeout`), `BUG-02` (`test_validate_cursor_backup_bytes_*`, `test_perform_validated_restore_refuses_corrupt_or_missing_backup_before_touching_state`), `BUG-03` (`test_headless_detection_covers_silent_and_automated_flags`), and `BUG-04` (`test_is_guardian_image_path_enforces_install_root_and_binary_name`, `test_process_entry_32w_matches_windows_sdk_size`).
+
+---
+
+## Batch 03 Test Evidence (`v1.1.0-rc.1`)
+
+- `build.ps1 -Arch x64 -Suffix x64`: Release build + **`18/18 PASSED`** (`12` lib + `1` guardian + `5` setup), `0` warnings.
+- `build.ps1 -Arch x64 -Suffix win7-win10-x64 -Toolchain 1.75.0 -Target x86_64-pc-windows-msvc -StaticCrt`: Release build + **`18/18 PASSED`**.
+- `build.ps1 -Arch x86 -Suffix win7-win10-x86 -Toolchain 1.75.0 -Target i686-pc-windows-msvc -StaticCrt`: Release build + **`18/18 PASSED`**.
+- Generated artifacts in `dist/`:
+  - `ModernInvertedCursors-Setup-v1.1.0-rc.1-x64.exe` (`675,840 B`), `ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe` (`298,496 B`)
+  - `ModernInvertedCursors-Setup-v1.1.0-rc.1-win7-win10-x64.exe`, `ModernInvertedCursors-Guardian-v1.1.0-rc.1-win7-win10-x64.exe`
+  - `ModernInvertedCursors-Setup-v1.1.0-rc.1-win7-win10-x86.exe` (`798,208 B`), `ModernInvertedCursors-Guardian-v1.1.0-rc.1-win7-win10-x86.exe` (`363,008 B`)

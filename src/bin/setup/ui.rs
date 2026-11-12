@@ -1,34 +1,21 @@
-#![windows_subsystem = "windows"]
-
+use crate::install::{start_install_worker, GUARDIAN_EXE_BYTES};
+use crate::{ControlId, GuiState, HitZone, Screen, WorkerUpdate, TIMER_ANIM};
 use modern_inverted_cursor::{
-    app_paths, app_paths_for_root, balanced_cursor_size, current_accessibility_step,
-    draw_cursor_glyph, export_backup, find_tray_window, load_saved_preset, parse_preset_arg,
-    perform_validated_restore, prepare_assets_parallel, read_log_tail, reg_delete_value,
-    reg_get_string, reg_set_string, register_uninstall_entry, reset_windows_default_cursors,
-    save_preset, set_startup_enabled, stop_targeted_guardians, unregister_uninstall_entry,
-    wide_z, window_process_id, write_guardian_binary, BoundedLogger, NamedReadyEvent, Preset,
-    ReadyWaitOutcome, ACCESSIBILITY_STEPS, APP_VERSION, CONFIG_SUBKEY, GUARDIAN_EXE_NAME,
-    GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY, UNINSTALL_SUBKEY,
+    balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step,
+    draw_cursor_glyph, wide_z, Preset, ACCESSIBILITY_STEPS, APP_VERSION, PACK_VERSION,
 };
-
 use std::{
-    env,
     ffi::c_void,
     fs,
-    io::Write,
-    os::windows::io::AsRawHandle,
     path::{Path, PathBuf},
-    process::{Child, Command},
     ptr::{null, null_mut},
     sync::{Arc, Mutex},
-    thread,
 };
 
-const GUARDIAN_EXE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_guardian.exe"));
 const WND_CLASS: &str = "ModernInvertedDarkSetupWnd";
 
-const LOGICAL_W: i32 = 620;
-const LOGICAL_H: i32 = 540;
+pub const LOGICAL_W: i32 = 620;
+pub const LOGICAL_H: i32 = 540;
 
 const WM_DESTROY: u32 = 0x0002;
 const WM_PAINT: u32 = 0x000F;
@@ -48,11 +35,9 @@ const WM_APP_WORKER_UPDATE: u32 = WM_APP + 10;
 
 const VK_RETURN: usize = 0x0D;
 const VK_ESCAPE: usize = 0x1B;
-
-const TIMER_ANIM: usize = 1;
 const GWLP_USERDATA: i32 = -21;
 
-const WS_OVERLAPPEDWINDOW_FIXED: u32 = 0x00CA_0000; // WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX
+const WS_OVERLAPPEDWINDOW_FIXED: u32 = 0x00CA_0000;
 const WS_VISIBLE: u32 = 0x1000_0000;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOMOVE: u32 = 0x0002;
@@ -78,7 +63,6 @@ const DEFAULT_CHARSET: u32 = 1;
 const FW_NORMAL: i32 = 400;
 const FW_SEMIBOLD: i32 = 600;
 const FW_BOLD: i32 = 700;
-
 const SW_SHOW: i32 = 5;
 
 const MB_YESNO: u32 = 0x0004;
@@ -90,53 +74,53 @@ type WndProc = unsafe extern "system" fn(*mut c_void, u32, usize, isize) -> isiz
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Rect {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
+pub struct Rect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
 }
 
 #[repr(C)]
-struct Point {
-    x: i32,
-    y: i32,
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
 }
 
 #[repr(C)]
-struct Msg {
-    hwnd: *mut c_void,
-    message: u32,
-    w_param: usize,
-    l_param: isize,
-    time: u32,
-    pt: Point,
+pub struct Msg {
+    pub hwnd: *mut c_void,
+    pub message: u32,
+    pub w_param: usize,
+    pub l_param: isize,
+    pub time: u32,
+    pub pt: Point,
 }
 
 #[repr(C)]
-struct PaintStruct {
-    hdc: *mut c_void,
-    f_erase: i32,
-    rc_paint: Rect,
-    f_restore: i32,
-    f_inc_update: i32,
-    rgb_reserved: [u8; 32],
+pub struct PaintStruct {
+    pub hdc: *mut c_void,
+    pub f_erase: i32,
+    pub rc_paint: Rect,
+    pub f_restore: i32,
+    pub f_inc_update: i32,
+    pub rgb_reserved: [u8; 32],
 }
 
 #[repr(C)]
-struct TrackMouseEvent {
-    cb_size: u32,
-    dw_flags: u32,
-    hwnd_track: *mut c_void,
-    dw_hover_time: u32,
+pub struct TrackMouseEvent {
+    pub cb_size: u32,
+    pub dw_flags: u32,
+    pub hwnd_track: *mut c_void,
+    pub dw_hover_time: u32,
 }
 
 #[repr(C)]
-struct MonitorInfo {
-    cb_size: u32,
-    rc_monitor: Rect,
-    rc_work: Rect,
-    dw_flags: u32,
+pub struct MonitorInfo {
+    pub cb_size: u32,
+    pub rc_monitor: Rect,
+    pub rc_work: Rect,
+    pub dw_flags: u32,
 }
 
 #[repr(C)]
@@ -156,18 +140,18 @@ struct WndClassExW {
 }
 
 #[repr(C)]
-struct BitmapInfoHeader {
-    bi_size: u32,
-    bi_width: i32,
-    bi_height: i32,
-    bi_planes: u16,
-    bi_bit_count: u16,
-    bi_compression: u32,
-    bi_size_image: u32,
-    bi_x_pels_per_meter: i32,
-    bi_y_pels_per_meter: i32,
-    bi_clr_used: u32,
-    bi_clr_important: u32,
+pub struct BitmapInfoHeader {
+    pub bi_size: u32,
+    pub bi_width: i32,
+    pub bi_height: i32,
+    pub bi_planes: u16,
+    pub bi_bit_count: u16,
+    pub bi_compression: u32,
+    pub bi_size_image: u32,
+    pub bi_x_pels_per_meter: i32,
+    pub bi_y_pels_per_meter: i32,
+    pub bi_clr_used: u32,
+    pub bi_clr_important: u32,
 }
 
 #[link(name = "kernel32")]
@@ -199,15 +183,15 @@ extern "system" {
     fn PostQuitMessage(n_exit_code: i32);
     fn PostMessageW(h_wnd: *mut c_void, msg: u32, w_param: usize, l_param: isize) -> i32;
     fn SendMessageW(h_wnd: *mut c_void, msg: u32, w_param: usize, l_param: isize) -> isize;
-    fn GetMessageW(
+    pub fn GetMessageW(
         lp_msg: *mut Msg,
         h_wnd: *mut c_void,
         w_msg_filter_min: u32,
         w_msg_filter_max: u32,
     ) -> i32;
-    fn TranslateMessage(lp_msg: *const Msg) -> i32;
-    fn DispatchMessageW(lp_msg: *const Msg) -> isize;
-    fn InvalidateRect(h_wnd: *mut c_void, lp_rect: *const Rect, b_erase: i32) -> i32;
+    pub fn TranslateMessage(lp_msg: *const Msg) -> i32;
+    pub fn DispatchMessageW(lp_msg: *const Msg) -> isize;
+    pub fn InvalidateRect(h_wnd: *mut c_void, lp_rect: *const Rect, b_erase: i32) -> i32;
     fn BeginPaint(h_wnd: *mut c_void, lp_paint: *mut PaintStruct) -> *mut c_void;
     fn EndPaint(h_wnd: *mut c_void, lp_paint: *const PaintStruct) -> i32;
     fn GetDC(h_wnd: *mut c_void) -> *mut c_void;
@@ -235,7 +219,7 @@ extern "system" {
     fn LoadCursorW(h_instance: *mut c_void, lp_cursor_name: *const u16) -> *mut c_void;
     fn SetCursor(h_cursor: *mut c_void) -> *mut c_void;
     fn TrackMouseEvent(lp_event_track: *mut TrackMouseEvent) -> i32;
-    fn SetTimer(
+    pub fn SetTimer(
         h_wnd: *mut c_void,
         n_id_event: usize,
         u_elapse: u32,
@@ -249,8 +233,8 @@ extern "system" {
         lprc: *mut Rect,
         format: u32,
     ) -> i32;
-    fn DestroyIcon(h_icon: *mut c_void) -> i32;
-    fn MessageBoxW(
+    pub fn DestroyIcon(h_icon: *mut c_void) -> i32;
+    pub fn MessageBoxW(
         h_wnd: *mut c_void,
         lp_text: *const u16,
         lp_caption: *const u16,
@@ -331,7 +315,6 @@ extern "system" {
     ) -> isize;
 }
 
-// Dynamic Win7–Win11 DPI + DWM Dark Mode helpers (zero extra .lib requirements)
 unsafe fn enable_per_monitor_dpi_v2() {
     let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
     if !u32_mod.is_null() {
@@ -380,7 +363,6 @@ unsafe fn window_dpi(hwnd: *mut c_void) -> u32 {
             }
         }
     }
-    // Windows 7 / 8 / 8.1 fallback via GDI LOGPIXELSX (88)
     let hdc = GetDC(hwnd);
     if !hdc.is_null() {
         let dpi = GetDeviceCaps(hdc, 88);
@@ -419,14 +401,13 @@ unsafe fn apply_dwm_dark_chrome(hwnd: *mut c_void) -> bool {
     }
     let set_attr: DwmSetAttrFn = std::mem::transmute(proc);
     let dark: i32 = 1;
-    // Try Win10 20H1+/Win11 attribute 20, then Win10 1809–1909 attribute 19 (Win7/8 ignore cleanly).
     let mut r1 = set_attr(hwnd, 20, &dark as *const i32 as *const c_void, 4);
     if r1 != 0 {
         r1 = set_attr(hwnd, 19, &dark as *const i32 as *const c_void, 4);
     }
-    let round: i32 = 2; // DWMWCP_ROUND (Win11)
+    let round: i32 = 2;
     let _ = set_attr(hwnd, 33, &round as *const i32 as *const c_void, 4);
-    let border: u32 = 0x003D_312B; // COLORREF BGR for #2B313D (Win11)
+    let border: u32 = 0x003D_312B;
     let _ = set_attr(hwnd, 34, &border as *const u32 as *const c_void, 4);
     r1 == 0
 }
@@ -446,7 +427,7 @@ fn blend_px(bg: u32, fg: u32, alpha: f32) -> u32 {
     let a = alpha.clamp(0.0, 1.0);
     let inv = 1.0 - a;
     let r = (((fg >> 16) & 0xFF) as f32 * a + ((bg >> 16) & 0xFF) as f32 * inv).round() as u32;
-    let g = (((fg >> 8) & 0xFF) as f32 * a + ((bg >> 8) & 0xFF) as f32 * inv).round() as u32;
+    let g = (((fg >> 8) & 0xFF) as f32 * a + ((bg & 0xFF00) >> 8) as f32 * inv).round() as u32;
     let b = ((fg & 0xFF) as f32 * a + (bg & 0xFF) as f32 * inv).round() as u32;
     0xFF00_0000 | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255)
 }
@@ -459,6 +440,7 @@ fn sdf_round_box(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -
     out_len + in_len - r
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fill_round_rect(
     buf: &mut [u32],
     w: usize,
@@ -495,7 +477,7 @@ fn fill_round_rect(
             }
             let cov = (0.75 - d).clamp(0.0, 1.0);
             let col = if border_px > 0.0 && d > -border_px - 0.5 {
-                let border_mix = ((d + border_px + 0.5) / 1.0).clamp(0.0, 1.0);
+                let border_mix = (d + border_px + 0.5).clamp(0.0, 1.0);
                 blend_px(fill_rgb, border_rgb, border_mix)
             } else {
                 0xFF00_0000 | fill_rgb
@@ -505,7 +487,17 @@ fn fill_round_rect(
     }
 }
 
-fn fill_circle_aa(buf: &mut [u32], w: usize, h: usize, cx: f32, cy: f32, radius: f32, fill: u32, border: Option<(u32, f32)>) {
+#[allow(clippy::too_many_arguments)]
+fn fill_circle_aa(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    fill: u32,
+    border: Option<(u32, f32)>,
+) {
     let x0 = (cx - radius - 2.0).floor().max(0.0) as usize;
     let y0 = (cy - radius - 2.0).floor().max(0.0) as usize;
     let x1 = (cx + radius + 2.0).ceil().min(w as f32) as usize;
@@ -535,7 +527,18 @@ fn fill_circle_aa(buf: &mut [u32], w: usize, h: usize, cx: f32, cy: f32, radius:
     }
 }
 
-fn draw_line_aa(buf: &mut [u32], w: usize, h: usize, ax: f32, ay: f32, bx: f32, by: f32, half_thick: f32, col: u32) {
+#[allow(clippy::too_many_arguments)]
+fn draw_line_aa(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+    half_thick: f32,
+    col: u32,
+) {
     let x0 = (ax.min(bx) - half_thick - 2.0).floor().max(0.0) as usize;
     let y0 = (ay.min(by) - half_thick - 2.0).floor().max(0.0) as usize;
     let x1 = (ax.max(bx) + half_thick + 2.0).ceil().min(w as f32) as usize;
@@ -569,61 +572,24 @@ fn fill_hline(buf: &mut [u32], w: usize, h: usize, x0: i32, x1: i32, y: i32, col
         return;
     }
     let row = y as usize * w;
-    let s = x0.max(0) as usize;
-    let e = x1.min(w as i32) as usize;
-    for px in s..e {
+    let s_px = x0.max(0) as usize;
+    let e_px = x1.min(w as i32) as usize;
+    for px in s_px..e_px {
         buf[row + px] = 0xFF00_0000 | col;
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ControlId {
-    PresetCard(usize),
-    ToggleStartup,
-    ToggleUninstall,
-    BtnInstall,
-    BtnRestore,
-    BtnOpenFolder,
-    BtnFinish,
-}
-
-#[derive(Clone)]
-struct HitZone {
-    id: ControlId,
-    rect: Rect,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Screen {
-    Setup,
-    Working,
-    Done,
-}
-
-#[derive(Clone)]
-struct WorkerUpdate {
-    pct: f32,
-    stage: usize, // 0..4 checklist step
-    status: String,
-    finished: bool,
-    is_restore: bool,
-    error: Option<String>,
-    applied_step: u32,
-    applied_px: u32,
-    install_root: PathBuf,
-}
-
-struct FontSet {
-    title: *mut c_void,
-    section: *mut c_void,
-    card_title: *mut c_void,
-    body: *mut c_void,
-    small: *mut c_void,
-    btn: *mut c_void,
+pub struct FontSet {
+    pub title: *mut c_void,
+    pub section: *mut c_void,
+    pub card_title: *mut c_void,
+    pub body: *mut c_void,
+    pub small: *mut c_void,
+    pub btn: *mut c_void,
 }
 
 impl FontSet {
-    unsafe fn create(dpi: u32) -> Self {
+    pub unsafe fn create(dpi: u32) -> Self {
         let make = |dip: i32, weight: i32| -> *mut c_void {
             let face = wide_z("Segoe UI");
             CreateFontW(
@@ -653,7 +619,7 @@ impl FontSet {
         }
     }
 
-    unsafe fn destroy(&mut self) {
+    pub unsafe fn destroy(&mut self) {
         for f in [
             self.title,
             self.section,
@@ -669,12 +635,12 @@ impl FontSet {
     }
 }
 
-struct Backbuffer {
-    hdc: *mut c_void,
-    hbm: *mut c_void,
-    bits: *mut u32,
-    w: usize,
-    h: usize,
+pub struct Backbuffer {
+    pub hdc: *mut c_void,
+    pub hbm: *mut c_void,
+    pub bits: *mut u32,
+    pub w: usize,
+    pub h: usize,
 }
 
 impl Backbuffer {
@@ -716,45 +682,19 @@ impl Backbuffer {
         std::slice::from_raw_parts_mut(self.bits, self.w * self.h)
     }
 
-    unsafe fn destroy(&mut self) {
-        if !self.hbm.is_null() {
-            DeleteObject(self.hbm);
-            self.hbm = null_mut();
-        }
+    pub unsafe fn destroy(&mut self) {
         if !self.hdc.is_null() {
             DeleteDC(self.hdc);
             self.hdc = null_mut();
         }
+        if !self.hbm.is_null() {
+            DeleteObject(self.hbm);
+            self.hbm = null_mut();
+        }
     }
 }
 
-struct GuiState {
-    hwnd: *mut c_void,
-    dpi: u32,
-    screen: Screen,
-    preset: Preset,
-    startup: bool,
-    register_uninstall: bool,
-    has_existing_install: bool,
-    current_step: u32,
-    current_px: u32,
-    hover: Option<ControlId>,
-    pressed: Option<ControlId>,
-    tracking_mouse: bool,
-    hits: Vec<HitZone>,
-    anim_pct: f32,
-    target_pct: f32,
-    worker_stage: usize,
-    worker_status: String,
-    worker_error: Option<String>,
-    is_restore: bool,
-    install_root: PathBuf,
-    shared_update: Arc<Mutex<WorkerUpdate>>,
-    fonts: FontSet,
-    backbuffer: Option<Backbuffer>,
-    app_icon: *mut c_void,
-}
-
+#[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
     hdc: *mut c_void,
     font: *mut c_void,
@@ -785,6 +725,7 @@ unsafe fn draw_text(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_toggle_switch(
     buf: &mut [u32],
     bw: usize,
@@ -821,7 +762,7 @@ fn draw_toggle_switch(
     fill_circle_aa(buf, bw, bh, kx, ky, knob_r, 0xF8FAFC, None);
 }
 
-fn render_ui(state: &mut GuiState) {
+pub fn render_ui(state: &mut GuiState) {
     let dpi = state.dpi;
     let cw = s(LOGICAL_W, dpi) as usize;
     let ch = s(LOGICAL_H, dpi) as usize;
@@ -849,12 +790,10 @@ fn render_ui(state: &mut GuiState) {
     };
     state.hits.clear();
 
-    // 1. Pixel-level SDF / vector background + cards + icons
     {
         let buf = unsafe { bb.pixels_mut() };
         buf.fill(0xFF0E_1117);
 
-        // Header bar background + hairline divider
         let hdr_h = s(84, dpi);
         for row in 0..(hdr_h as usize).min(ch) {
             let start = row * cw;
@@ -862,7 +801,6 @@ fn render_ui(state: &mut GuiState) {
         }
         fill_hline(buf, cw, ch, 0, cw as i32, hdr_h, 0x232A38);
 
-        // Header icon box + split-contrast vector arrow
         fill_round_rect(
             buf,
             cw,
@@ -887,14 +825,13 @@ fn render_ui(state: &mut GuiState) {
             false,
         );
 
-        // Version pill
         fill_round_rect(
             buf,
             cw,
             ch,
             s(334, dpi),
             s(21, dpi),
-            s(138, dpi),
+            s(160, dpi),
             s(22, dpi),
             s(11, dpi) as f32,
             0x18253E,
@@ -902,7 +839,6 @@ fn render_ui(state: &mut GuiState) {
             1.0,
         );
 
-        // Footer background
         let ftr_y = s(460, dpi);
         for row in (ftr_y as usize)..ch {
             let start = row * cw;
@@ -912,7 +848,6 @@ fn render_ui(state: &mut GuiState) {
 
         match state.screen {
             Screen::Setup => {
-                // Live pointer size pill
                 fill_round_rect(
                     buf,
                     cw,
@@ -927,7 +862,6 @@ fn render_ui(state: &mut GuiState) {
                     1.0,
                 );
 
-                // 2x2 Preset cards
                 let card_w = s(279, dpi);
                 let card_h = s(88, dpi);
                 let col_x = [s(24, dpi), s(317, dpi)];
@@ -961,7 +895,6 @@ fn render_ui(state: &mut GuiState) {
                         bw,
                     );
 
-                    // Circular preview badge inside card
                     let circle_r = s(23, dpi) as f32;
                     let ccx = cx as f32 + s(36, dpi) as f32;
                     let ccy = cy as f32 + (card_h as f32) * 0.5;
@@ -1015,7 +948,6 @@ fn render_ui(state: &mut GuiState) {
                     });
                 }
 
-                // Options card
                 let opt_y = s(336, dpi);
                 let opt_h = s(108, dpi);
                 fill_round_rect(
@@ -1031,7 +963,15 @@ fn render_ui(state: &mut GuiState) {
                     0x252D3B,
                     1.1,
                 );
-                fill_hline(buf, cw, ch, s(40, dpi), s(580, dpi), opt_y + s(54, dpi), 0x222937);
+                fill_hline(
+                    buf,
+                    cw,
+                    ch,
+                    s(40, dpi),
+                    s(580, dpi),
+                    opt_y + s(54, dpi),
+                    0x222937,
+                );
 
                 let sw_x = s(538, dpi);
                 let sw_w = s(42, dpi);
@@ -1078,18 +1018,23 @@ fn render_ui(state: &mut GuiState) {
                     },
                 });
 
-                // Footer buttons
                 if state.has_existing_install {
                     let hov = state.hover == Some(ControlId::BtnRestore);
                     let prs = state.pressed == Some(ControlId::BtnRestore);
-                    let bg = if prs { 0x1A2029 } else if hov { 0x293242 } else { 0x1F2633 };
+                    let bg = if prs {
+                        0x1A2029
+                    } else if hov {
+                        0x293242
+                    } else {
+                        0x1F2633
+                    };
                     fill_round_rect(
                         buf,
                         cw,
                         ch,
-                        s(314, dpi),
+                        s(304, dpi),
                         s(480, dpi),
-                        s(132, dpi),
+                        s(144, dpi),
                         s(40, dpi),
                         s(9, dpi) as f32,
                         bg,
@@ -1099,9 +1044,9 @@ fn render_ui(state: &mut GuiState) {
                     state.hits.push(HitZone {
                         id: ControlId::BtnRestore,
                         rect: Rect {
-                            left: s(314, dpi),
+                            left: s(304, dpi),
                             top: s(480, dpi),
-                            right: s(446, dpi),
+                            right: s(448, dpi),
                             bottom: s(520, dpi),
                         },
                     });
@@ -1109,7 +1054,13 @@ fn render_ui(state: &mut GuiState) {
 
                 let hov_i = state.hover == Some(ControlId::BtnInstall);
                 let prs_i = state.pressed == Some(ControlId::BtnInstall);
-                let ibg = if prs_i { 0x1D4ED8 } else if hov_i { 0x3B82F6 } else { 0x2563EB };
+                let ibg = if prs_i {
+                    0x1D4ED8
+                } else if hov_i {
+                    0x3B82F6
+                } else {
+                    0x2563EB
+                };
                 fill_round_rect(
                     buf,
                     cw,
@@ -1148,7 +1099,6 @@ fn render_ui(state: &mut GuiState) {
                     1.2,
                 );
 
-                // Progress bar track
                 let bar_x = s(84, dpi);
                 let bar_y = s(222, dpi);
                 let bar_w = s(452, dpi);
@@ -1184,7 +1134,6 @@ fn render_ui(state: &mut GuiState) {
                     );
                 }
 
-                // 4 checklist step indicators
                 let sc = dpi as f32 / 96.0;
                 for i in 0..4usize {
                     let sy = s(276 + i as i32 * 34, dpi) as f32;
@@ -1192,10 +1141,39 @@ fn render_ui(state: &mut GuiState) {
                     let r = s(7, dpi) as f32;
                     if i < state.worker_stage {
                         fill_circle_aa(buf, cw, ch, sx, sy, r, 0x16A34A, Some((0x22C55E, 1.0)));
-                        draw_line_aa(buf, cw, ch, sx - 3.2 * sc, sy, sx - 0.8 * sc, sy + 2.6 * sc, 1.1 * sc, 0xFFFF_FFFF);
-                        draw_line_aa(buf, cw, ch, sx - 0.8 * sc, sy + 2.6 * sc, sx + 3.6 * sc, sy - 2.6 * sc, 1.1 * sc, 0xFFFF_FFFF);
+                        draw_line_aa(
+                            buf,
+                            cw,
+                            ch,
+                            sx - 3.2 * sc,
+                            sy,
+                            sx - 0.8 * sc,
+                            sy + 2.6 * sc,
+                            1.1 * sc,
+                            0xFFFF_FFFF,
+                        );
+                        draw_line_aa(
+                            buf,
+                            cw,
+                            ch,
+                            sx - 0.8 * sc,
+                            sy + 2.6 * sc,
+                            sx + 3.6 * sc,
+                            sy - 2.6 * sc,
+                            1.1 * sc,
+                            0xFFFF_FFFF,
+                        );
                     } else if i == state.worker_stage {
-                        fill_circle_aa(buf, cw, ch, sx, sy, r, 0x1E3A8A, Some((0x60A5FA, 1.3 * sc)));
+                        fill_circle_aa(
+                            buf,
+                            cw,
+                            ch,
+                            sx,
+                            sy,
+                            r,
+                            0x1E3A8A,
+                            Some((0x60A5FA, 1.3 * sc)),
+                        );
                         fill_circle_aa(buf, cw, ch, sx, sy, r * 0.42, 0x93C5FD, None);
                     } else {
                         fill_circle_aa(buf, cw, ch, sx, sy, r, 0x1C222D, Some((0x374151, 1.0)));
@@ -1208,7 +1186,7 @@ fn render_ui(state: &mut GuiState) {
                     cw,
                     ch,
                     s(44, dpi),
-                    s(112, dpi),
+                    s(110, dpi),
                     s(532, dpi),
                     s(322, dpi),
                     s(14, dpi) as f32,
@@ -1223,12 +1201,52 @@ fn render_ui(state: &mut GuiState) {
                 let rad = s(24, dpi) as f32;
                 if state.worker_error.is_some() {
                     fill_circle_aa(buf, cw, ch, cx, cy, rad, 0x3B181E, Some((0xEF4444, 1.6)));
-                    draw_line_aa(buf, cw, ch, cx - 7.5 * sc, cy - 7.5 * sc, cx + 7.5 * sc, cy + 7.5 * sc, 1.8 * sc, 0xFFFF_FFFF);
-                    draw_line_aa(buf, cw, ch, cx + 7.5 * sc, cy - 7.5 * sc, cx - 7.5 * sc, cy + 7.5 * sc, 1.8 * sc, 0xFFFF_FFFF);
+                    draw_line_aa(
+                        buf,
+                        cw,
+                        ch,
+                        cx - 7.5 * sc,
+                        cy - 7.5 * sc,
+                        cx + 7.5 * sc,
+                        cy + 7.5 * sc,
+                        1.8 * sc,
+                        0xFFFF_FFFF,
+                    );
+                    draw_line_aa(
+                        buf,
+                        cw,
+                        ch,
+                        cx + 7.5 * sc,
+                        cy - 7.5 * sc,
+                        cx - 7.5 * sc,
+                        cy + 7.5 * sc,
+                        1.8 * sc,
+                        0xFFFF_FFFF,
+                    );
                 } else {
                     fill_circle_aa(buf, cw, ch, cx, cy, rad, 0x132E22, Some((0x22C55E, 1.6)));
-                    draw_line_aa(buf, cw, ch, cx - 8.5 * sc, cy + 1.0 * sc, cx - 2.0 * sc, cy + 7.5 * sc, 1.8 * sc, 0xFFFF_FFFF);
-                    draw_line_aa(buf, cw, ch, cx - 2.0 * sc, cy + 7.5 * sc, cx + 9.5 * sc, cy - 6.5 * sc, 1.8 * sc, 0xFFFF_FFFF);
+                    draw_line_aa(
+                        buf,
+                        cw,
+                        ch,
+                        cx - 8.5 * sc,
+                        cy + 1.0 * sc,
+                        cx - 2.0 * sc,
+                        cy + 7.5 * sc,
+                        1.8 * sc,
+                        0xFFFF_FFFF,
+                    );
+                    draw_line_aa(
+                        buf,
+                        cw,
+                        ch,
+                        cx - 2.0 * sc,
+                        cy + 7.5 * sc,
+                        cx + 9.5 * sc,
+                        cy - 6.5 * sc,
+                        1.8 * sc,
+                        0xFFFF_FFFF,
+                    );
                 }
 
                 for r_idx in 0..3 {
@@ -1236,7 +1254,6 @@ fn render_ui(state: &mut GuiState) {
                     fill_hline(buf, cw, ch, s(76, dpi), s(544, dpi), div_y, 0x222937);
                 }
 
-                // Open folder secondary button
                 let hov_f = state.hover == Some(ControlId::BtnOpenFolder);
                 let fbg = if hov_f { 0x293242 } else { 0x1F2633 };
                 fill_round_rect(
@@ -1290,7 +1307,6 @@ fn render_ui(state: &mut GuiState) {
         }
     }
 
-    // 2. Crisp ClearType Segoe UI Text via GDI onto the same backbuffer DC
     unsafe {
         let hdc = bb.hdc;
         draw_text(
@@ -1310,7 +1326,7 @@ fn render_ui(state: &mut GuiState) {
             0x7FB3FF,
             s(334, dpi),
             s(21, dpi),
-            s(138, dpi),
+            s(160, dpi),
             s(22, dpi),
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
             &format!("v{APP_VERSION} • Pack {PACK_VERSION}"),
@@ -1324,21 +1340,26 @@ fn render_ui(state: &mut GuiState) {
             s(516, dpi),
             s(22, dpi),
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-            "Dynamic XOR-inverting Windows 11 pointers + silent system-tray guardian",
+            "Dynamic XOR-inverting Windows pointers + silent system-tray guardian",
         );
 
         match state.screen {
             Screen::Setup => {
+                let section_title = if state.is_modify_mode {
+                    "MAINTENANCE — CHOOSE PRESET"
+                } else {
+                    "CHOOSE CURSOR PRESET"
+                };
                 draw_text(
                     hdc,
                     state.fonts.section,
                     0x7D8799,
                     s(24, dpi),
                     s(98, dpi),
-                    s(220, dpi),
+                    s(240, dpi),
                     s(20, dpi),
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-                    "CHOOSE CURSOR PRESET",
+                    section_title,
                 );
                 draw_text(
                     hdc,
@@ -1350,7 +1371,7 @@ fn render_ui(state: &mut GuiState) {
                     s(24, dpi),
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE,
                     &format!(
-                        "Pointer Size: {}/{ACCESSIBILITY_STEPS} → {} px (Balanced)",
+                        "Pointer Size: {}/{ACCESSIBILITY_STEPS} -> {} px (Balanced)",
                         state.current_step, state.current_px
                     ),
                 );
@@ -1419,7 +1440,7 @@ fn render_ui(state: &mut GuiState) {
                     s(460, dpi),
                     s(18, dpi),
                     DT_LEFT | DT_SINGLELINE,
-                    "Runs invisibly (~0.5 MB RAM, 0% idle CPU) with no terminal window",
+                    "Runs silently (~1-2 MB RAM, negligible idle CPU) with no terminal window",
                 );
                 draw_text(
                     hdc,
@@ -1441,7 +1462,7 @@ fn render_ui(state: &mut GuiState) {
                     s(460, dpi),
                     s(18, dpi),
                     DT_LEFT | DT_SINGLELINE,
-                    "Allows one-click uninstall & cursor restoration from Windows Settings",
+                    "Enables Modify, Repair & Uninstall from Windows Settings",
                 );
 
                 draw_text(
@@ -1450,10 +1471,13 @@ fn render_ui(state: &mut GuiState) {
                     0x7D8799,
                     s(24, dpi),
                     s(488, dpi),
-                    s(280, dpi),
+                    s(270, dpi),
                     s(24, dpi),
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-                    &format!("Pure Rust • Safe backup • {} KB guardian", GUARDIAN_EXE_BYTES.len() / 1024),
+                    &format!(
+                        "Pure Rust • Safe backup • {} KB guardian",
+                        GUARDIAN_EXE_BYTES.len() / 1024
+                    ),
                 );
 
                 if state.has_existing_install {
@@ -1461,12 +1485,12 @@ fn render_ui(state: &mut GuiState) {
                         hdc,
                         state.fonts.btn,
                         0xD6DEE9,
-                        s(314, dpi),
+                        s(304, dpi),
                         s(480, dpi),
-                        s(132, dpi),
+                        s(144, dpi),
                         s(40, dpi),
                         DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-                        "Restore Original",
+                        "Restore & Uninstall",
                     );
                 }
 
@@ -1528,12 +1552,12 @@ fn render_ui(state: &mut GuiState) {
                 );
 
                 let guardian_kb = GUARDIAN_EXE_BYTES.len() / 1024;
-                let step3_label = format!("Install silent {guardian_kb} KB tray guardian & Windows integration");
+                let step3_label = format!("Install Setup & {guardian_kb} KB tray guardian");
                 let steps = if state.is_restore {
                     [
-                        "Stop background tray guardian cleanly",
-                        "Remove startup & Installed Apps entries",
-                        "Restore original backup-original.reg scheme",
+                        "Validate original backup-original.reg scheme",
+                        "Stop tray guardian & restore backup",
+                        "Clean startup & Installed Apps entries",
                         "Reload native Windows cursor handles",
                     ]
                 } else {
@@ -1541,7 +1565,7 @@ fn render_ui(state: &mut GuiState) {
                         "Back up pre-existing Windows cursor scheme",
                         "Download & SHA-1 verify 32 upstream v3.6.2 assets",
                         step3_label.as_str(),
-                        "Apply live balanced cursors & start tray icon",
+                        "Verify tray guardian startup & initial cursor apply",
                     ]
                 };
                 for (i, label) in steps.iter().enumerate() {
@@ -1578,8 +1602,7 @@ fn render_ui(state: &mut GuiState) {
                 );
             }
             Screen::Done => {
-                let heading = if let Some(ref err) = state.worker_error {
-                    let _ = err;
+                let heading = if state.worker_error.is_some() {
                     "Setup Encountered an Error"
                 } else if state.is_restore {
                     "Original Windows Cursors Restored"
@@ -1634,7 +1657,7 @@ fn render_ui(state: &mut GuiState) {
                         ),
                         (
                             "Background Guardian",
-                            "Running silently in Show hidden icons".to_string(),
+                            "Verified active in Show hidden icons".to_string(),
                         ),
                         (
                             "Install Folder",
@@ -1708,7 +1731,7 @@ fn render_ui(state: &mut GuiState) {
     }
 }
 
-fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
+pub fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
     let w = bb.w as u32;
     let h = bb.h as u32;
     let row_bytes = (w * 3) as usize;
@@ -1734,6 +1757,7 @@ fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
     bmp.extend_from_slice(&0u32.to_le_bytes());
 
     let pixels = unsafe { std::slice::from_raw_parts(bb.bits, (w * h) as usize) };
+    let pad_zeros = [0u8; 3];
     for y in (0..h as usize).rev() {
         let row = &pixels[y * w as usize..(y + 1) * w as usize];
         for &px in row {
@@ -1741,8 +1765,8 @@ fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
             bmp.push(((px >> 8) & 0xFF) as u8);
             bmp.push(((px >> 16) & 0xFF) as u8);
         }
-        for _ in 0..pad {
-            bmp.push(0);
+        if pad > 0 {
+            bmp.extend_from_slice(&pad_zeros[..pad]);
         }
     }
 
@@ -1752,7 +1776,7 @@ fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
     fs::write(out_path, &bmp).map_err(|e| format!("write bmp failed: {e}"))
 }
 
-fn push_worker_update(hwnd_raw: usize, shared: &Arc<Mutex<WorkerUpdate>>, u: WorkerUpdate) {
+pub fn push_worker_update(hwnd_raw: usize, shared: &Arc<Mutex<WorkerUpdate>>, u: WorkerUpdate) {
     if let Ok(mut guard) = shared.lock() {
         *guard = u;
     }
@@ -1761,388 +1785,6 @@ fn push_worker_update(hwnd_raw: usize, shared: &Arc<Mutex<WorkerUpdate>>, u: Wor
             PostMessageW(hwnd_raw as *mut c_void, WM_APP_WORKER_UPDATE, 0, 0);
         }
     }
-}
-
-fn verify_child_readiness(
-    mut child: Child,
-    ev: &NamedReadyEvent,
-    timeout_ms: u32,
-    log_path: &Path,
-) -> Result<Child, String> {
-    let proc_handle = child.as_raw_handle() as *mut c_void;
-    match ev.wait_process_or_ready(proc_handle, timeout_ms) {
-        ReadyWaitOutcome::Ready => {
-            if let Ok(Some(status)) = child.try_wait() {
-                let tail = read_log_tail(log_path, 4);
-                return Err(format!(
-                    "Guardian exited right after signaling ready ({status}). Log: {tail}"
-                ));
-            }
-            Ok(child)
-        }
-        ReadyWaitOutcome::ExitedEarly => {
-            let status = child.wait().ok();
-            let code_desc = status
-                .and_then(|s| s.code())
-                .map(|c| format!("exit code {c}"))
-                .unwrap_or_else(|| "unknown exit status".into());
-            let tail = read_log_tail(log_path, 4);
-            let suffix = if tail.is_empty() {
-                String::new()
-            } else {
-                format!(" Recent log: {tail}")
-            };
-            Err(format!(
-                "Guardian process terminated prematurely ({code_desc}) before cursor initialization.{suffix}"
-            ))
-        }
-        ReadyWaitOutcome::TimedOut => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let tail = read_log_tail(log_path, 4);
-            Err(format!(
-                "Guardian did not confirm readiness within {timeout_ms}ms.{}{tail}",
-                if tail.is_empty() { "" } else { " Recent log: " }
-            ))
-        }
-        ReadyWaitOutcome::WaitError(code) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err(format!("WaitForMultipleObjects failed while starting guardian (code={code})."))
-        }
-    }
-}
-
-fn launch_and_verify_guardian(
-    root: &Path,
-    guardian_exe: &Path,
-    preset: Preset,
-    timeout_ms: u32,
-) -> Result<(), String> {
-    let ev = NamedReadyEvent::create_unique("setup")?;
-    let child = Command::new(guardian_exe)
-        .args(["--tray", "--preset", preset.cli_name(), "--ready-event", &ev.name])
-        .spawn()
-        .map_err(|e| format!("Could not launch {}: {e}", guardian_exe.display()))?;
-
-    let child = verify_child_readiness(child, &ev, timeout_ms, &root.join("guardian.log"))?;
-    let expected_pid = child.id();
-
-    let tray_hwnd = find_tray_window();
-    let tray_pid = window_process_id(tray_hwnd);
-    if tray_pid != Some(expected_pid) {
-        return Err(format!(
-            "Guardian readiness event fired, but tray window verification failed (expected pid={expected_pid}, found={tray_pid:?})."
-        ));
-    }
-
-    let runtime_ver = reg_get_string(CONFIG_SUBKEY, Some("RuntimeVersion"));
-    if runtime_ver.as_deref() != Some(APP_VERSION) {
-        return Err(format!(
-            "Guardian version mismatch after startup (expected {APP_VERSION}, got {:?}).",
-            runtime_ver
-        ));
-    }
-    Ok(())
-}
-
-struct InstallSnapshot {
-    prev_run_cmd: Option<String>,
-    prev_preset: Option<String>,
-    had_uninstall: bool,
-    prev_guardian: Option<Vec<u8>>,
-}
-
-impl InstallSnapshot {
-    fn capture(guardian_exe: &Path) -> Self {
-        Self {
-            prev_run_cmd: reg_get_string(RUN_SUBKEY, Some(GUARDIAN_RUN_VALUE)),
-            prev_preset: reg_get_string(CONFIG_SUBKEY, Some("Preset")),
-            had_uninstall: reg_get_string(UNINSTALL_SUBKEY, Some("UninstallString")).is_some(),
-            prev_guardian: fs::read(guardian_exe).ok(),
-        }
-    }
-
-    fn rollback(&self, root: &Path, guardian_exe: &Path, backup_path: &Path, log: &BoundedLogger) {
-        log.line("[rollback] Reverting install state after guardian verification failure...");
-        let _ = stop_targeted_guardians(root, Some(log));
-        match self.prev_run_cmd.as_deref() {
-            Some(cmd) => {
-                let _ = reg_set_string(RUN_SUBKEY, Some(GUARDIAN_RUN_VALUE), false, cmd);
-            }
-            None => reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE),
-        }
-        match self.prev_preset.as_deref() {
-            Some(p) => {
-                let _ = reg_set_string(CONFIG_SUBKEY, Some("Preset"), false, p);
-            }
-            None => reg_delete_value(CONFIG_SUBKEY, "Preset"),
-        }
-        if !self.had_uninstall {
-            unregister_uninstall_entry();
-        }
-        match self.prev_guardian.as_deref() {
-            Some(bytes) => {
-                let _ = write_guardian_binary(guardian_exe, bytes);
-            }
-            None => {
-                let _ = fs::remove_file(guardian_exe);
-                let _ = modern_inverted_cursor::restore_backup(backup_path, Some(log));
-            }
-        }
-    }
-}
-
-fn execute_install_pipeline(
-    root: &Path,
-    install_dir: &Path,
-    backup_path: &Path,
-    preset: Preset,
-    startup: bool,
-    register_uninstall: bool,
-    sandbox_only: bool,
-    hwnd_raw: usize,
-    shared: Option<&Arc<Mutex<WorkerUpdate>>>,
-) -> Result<(u32, u32), String> {
-    let log = BoundedLogger::new(root.join("guardian.log"), false);
-    let report = |pct: f32, stage: usize, msg: String| {
-        if let Some(sh) = shared {
-            push_worker_update(
-                hwnd_raw,
-                sh,
-                WorkerUpdate {
-                    pct,
-                    stage,
-                    status: msg,
-                    finished: false,
-                    is_restore: false,
-                    error: None,
-                    applied_step: 1,
-                    applied_px: 32,
-                    install_root: root.to_path_buf(),
-                },
-            );
-        }
-    };
-
-    report(0.08, 0, "Backing up pre-existing Windows cursor scheme...".into());
-    if !sandbox_only {
-        export_backup(backup_path, Some(&log))?;
-    } else {
-        fs::create_dir_all(root).map_err(|e| format!("Could not create {}: {e}", root.display()))?;
-    }
-
-    report(0.18, 1, "Preparing 32 upstream v3.6.2 cursor files...".into());
-    prepare_assets_parallel(install_dir, Some(&log), |done, total, name| {
-        let pct = 0.18 + 0.52 * (done as f32 / total as f32);
-        report(
-            pct,
-            1,
-            format!("Verified {done}/{total} cursor assets ({name})"),
-        );
-    })?;
-
-    report(0.76, 2, "Installing ultra-lightweight tray guardian...".into());
-    let guardian_exe = root.join(GUARDIAN_EXE_NAME);
-    let snapshot = if !sandbox_only {
-        let s = InstallSnapshot::capture(&guardian_exe);
-        stop_targeted_guardians(root, Some(&log))?;
-        Some(s)
-    } else {
-        None
-    };
-
-    if let Err(err) = write_guardian_binary(&guardian_exe, GUARDIAN_EXE_BYTES) {
-        if let Some(ref s) = snapshot {
-            s.rollback(root, &guardian_exe, backup_path, &log);
-        }
-        return Err(err);
-    }
-
-    if !sandbox_only {
-        if let Err(err) = (|| -> Result<(), String> {
-            save_preset(preset)?;
-            set_startup_enabled(&guardian_exe, startup)?;
-            if register_uninstall {
-                register_uninstall_entry(root, &guardian_exe)?;
-            } else {
-                unregister_uninstall_entry();
-            }
-            report(
-                0.90,
-                3,
-                "Applying balanced cursors & verifying tray guardian startup...".into(),
-            );
-            launch_and_verify_guardian(root, &guardian_exe, preset, 10_000)?;
-            Ok(())
-        })() {
-            if let Some(ref s) = snapshot {
-                s.rollback(root, &guardian_exe, backup_path, &log);
-            }
-            return Err(err);
-        }
-    }
-
-    let st = current_accessibility_step();
-    let px = balanced_cursor_size(st);
-
-    log.line(format!(
-        "Setup v{APP_VERSION} installed & verified {} ({}px, sandbox={sandbox_only})",
-        preset.short_name(),
-        px
-    ));
-    Ok((st, px))
-}
-
-fn start_install_worker(state: &mut GuiState, is_restore: bool) {
-    state.screen = Screen::Working;
-    state.is_restore = is_restore;
-    state.anim_pct = 0.04;
-    state.target_pct = 0.08;
-    state.worker_stage = 0;
-    state.worker_error = None;
-    state.worker_status = if is_restore {
-        "Closing tray guardian...".into()
-    } else {
-        "Initializing installer...".into()
-    };
-
-    let hwnd = state.hwnd as usize;
-    let shared = Arc::clone(&state.shared_update);
-    let preset = state.preset;
-    let startup = state.startup;
-    let reg_un = state.register_uninstall;
-
-    unsafe {
-        SetTimer(state.hwnd, TIMER_ANIM, 30, null_mut());
-        InvalidateRect(state.hwnd, null(), 0);
-    }
-
-    thread::spawn(move || {
-        let hwnd_raw = hwnd;
-        let paths = app_paths();
-        let res = match paths {
-            Ok((root, install_dir, backup_path)) => {
-                if is_restore {
-                    let log = BoundedLogger::new(root.join("guardian.log"), false);
-                    push_worker_update(
-                        hwnd_raw,
-                        &shared,
-                        WorkerUpdate {
-                            pct: 0.25,
-                            stage: 0,
-                            status: "Validating original cursor backup...".into(),
-                            finished: false,
-                            is_restore: true,
-                            error: None,
-                            applied_step: 1,
-                            applied_px: 32,
-                            install_root: root.clone(),
-                        },
-                    );
-                    perform_validated_restore(
-                        &backup_path,
-                        Some(&log),
-                        || {
-                            push_worker_update(
-                                hwnd_raw,
-                                &shared,
-                                WorkerUpdate {
-                                    pct: 0.55,
-                                    stage: 1,
-                                    status: "Stopping tray guardian & restoring backup...".into(),
-                                    finished: false,
-                                    is_restore: true,
-                                    error: None,
-                                    applied_step: 1,
-                                    applied_px: 32,
-                                    install_root: root.clone(),
-                                },
-                            );
-                            stop_targeted_guardians(&root, Some(&log))
-                        },
-                        || {
-                            push_worker_update(
-                                hwnd_raw,
-                                &shared,
-                                WorkerUpdate {
-                                    pct: 0.85,
-                                    stage: 2,
-                                    status: "Cleaning startup & Installed Apps entries...".into(),
-                                    finished: false,
-                                    is_restore: true,
-                                    error: None,
-                                    applied_step: 1,
-                                    applied_px: 32,
-                                    install_root: root.clone(),
-                                },
-                            );
-                            reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-                            reg_delete_value(CONFIG_SUBKEY, "Preset");
-                            unregister_uninstall_entry();
-                            let gexe = root.join(GUARDIAN_EXE_NAME);
-                            if gexe.exists() {
-                                let _ = fs::remove_file(&gexe);
-                            }
-                            Ok(())
-                        },
-                    )
-                    .map(|()| (root, 1u32, 32u32))
-                } else {
-                    execute_install_pipeline(
-                        &root,
-                        &install_dir,
-                        &backup_path,
-                        preset,
-                        startup,
-                        reg_un,
-                        false,
-                        hwnd_raw,
-                        Some(&shared),
-                    )
-                    .map(|(st, px)| (root, st, px))
-                }
-            }
-            Err(e) => Err(e),
-        };
-
-        match res {
-            Ok((root, st, px)) => {
-                push_worker_update(
-                    hwnd_raw,
-                    &shared,
-                    WorkerUpdate {
-                        pct: 1.0,
-                        stage: 4,
-                        status: "Complete!".into(),
-                        finished: true,
-                        is_restore,
-                        error: None,
-                        applied_step: st,
-                        applied_px: px,
-                        install_root: root,
-                    },
-                );
-            }
-            Err(err) => {
-                push_worker_update(
-                    hwnd_raw,
-                    &shared,
-                    WorkerUpdate {
-                        pct: 1.0,
-                        stage: 4,
-                        status: "Failed".into(),
-                        finished: true,
-                        is_restore,
-                        error: Some(err),
-                        applied_step: 1,
-                        applied_px: 32,
-                        install_root: PathBuf::new(),
-                    },
-                );
-            }
-        }
-    });
 }
 
 fn hit_test(hits: &[HitZone], x: i32, y: i32) -> Option<ControlId> {
@@ -2196,7 +1838,11 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_SETCURSOR => {
             if (l_param as u32 & 0xFFFF) == 1 {
-                let id = if (*ptr).hover.is_some() { IDC_HAND } else { IDC_ARROW };
+                let id = if (*ptr).hover.is_some() {
+                    IDC_HAND
+                } else {
+                    IDC_ARROW
+                };
                 SetCursor(LoadCursorW(null_mut(), id as *const u16));
                 return 1;
             }
@@ -2213,10 +1859,8 @@ unsafe extern "system" fn wnd_proc(
                 TrackMouseEvent(&mut tme);
                 state.tracking_mouse = true;
             }
-            let x = (l_param as i32) & 0xFFFF;
-            let y = ((l_param as i32) >> 16) & 0xFFFF;
-            let x = (x as i16) as i32;
-            let y = (y as i16) as i32;
+            let x = ((l_param as i32 & 0xFFFF) as i16) as i32;
+            let y = (((l_param as i32 >> 16) & 0xFFFF) as i16) as i32;
             let next_hover = hit_test(&state.hits, x, y);
             if next_hover != state.hover {
                 state.hover = next_hover;
@@ -2270,9 +1914,9 @@ unsafe extern "system" fn wnd_proc(
                         return 0;
                     }
                     ControlId::BtnRestore => {
-                        let title = wide_z("Restore Original Cursors");
+                        let title = wide_z("Restore & Uninstall Modern Inverted Cursors");
                         let text = wide_z(
-                            "Restore your original Windows cursor backup and remove the startup tray guardian?",
+                            "Validate your original cursor backup, restore Windows cursors, remove startup launch, and uninstall?",
                         );
                         let ans = MessageBoxW(
                             hwnd,
@@ -2385,7 +2029,7 @@ unsafe extern "system" fn wnd_proc(
     DefWindowProcW(hwnd, msg, w_param, l_param)
 }
 
-fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut c_void, String> {
+pub fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut c_void, String> {
     unsafe {
         enable_per_monitor_dpi_v2();
         let h_inst = GetModuleHandleW(null());
@@ -2468,11 +2112,12 @@ fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut c_vo
     }
 }
 
-fn new_gui_state(
+pub fn new_gui_state(
     preset: Preset,
     startup: bool,
     register_uninstall: bool,
     has_existing: bool,
+    is_modify_mode: bool,
     install_root: PathBuf,
 ) -> *mut GuiState {
     let step = current_accessibility_step();
@@ -2493,6 +2138,7 @@ fn new_gui_state(
         startup,
         register_uninstall,
         has_existing_install: has_existing,
+        is_modify_mode,
         current_step: step,
         current_px: px,
         hover: None,
@@ -2519,12 +2165,19 @@ fn new_gui_state(
         })),
         fonts: dummy_fonts,
         backbuffer: None,
-        app_icon: modern_inverted_cursor::create_split_cursor_hicon(32, Preset::Regular, false),
+        app_icon: create_split_cursor_hicon(32, Preset::Regular, false),
     }))
 }
 
-fn run_smoke_ui(out_dir: &Path) -> Result<(), String> {
-    let state_ptr = new_gui_state(Preset::Compact, true, true, true, PathBuf::from(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors"));
+pub fn run_smoke_ui(out_dir: &Path) -> Result<(), String> {
+    let state_ptr = new_gui_state(
+        Preset::Compact,
+        true,
+        true,
+        true,
+        false,
+        PathBuf::from(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors"),
+    );
     let hwnd = create_setup_window(state_ptr, false)?;
     unsafe {
         let state = &mut *state_ptr;
@@ -2574,238 +2227,4 @@ fn run_smoke_ui(out_dir: &Path) -> Result<(), String> {
         let _ = Box::from_raw(state_ptr);
     }
     Ok(())
-}
-
-fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    for i in 0..args.len() {
-        if args[i] == flag {
-            return args.get(i + 1).cloned();
-        }
-        if let Some(v) = args[i].strip_prefix(&format!("{flag}=")) {
-            return Some(v.to_string());
-        }
-    }
-    None
-}
-
-fn run() -> Result<(), String> {
-    let args: Vec<String> = env::args().skip(1).collect();
-
-    if let Some(smoke_dir) = arg_value(&args, "--smoke-ui") {
-        return run_smoke_ui(Path::new(&smoke_dir));
-    }
-
-    if let Some(sandbox_dir) = arg_value(&args, "--sandbox") {
-        let preset = parse_preset_arg(&args)?.unwrap_or(Preset::Compact);
-        let (root, install_dir, backup_path) = app_paths_for_root(PathBuf::from(sandbox_dir));
-        let (step, px) = execute_install_pipeline(
-            &root,
-            &install_dir,
-            &backup_path,
-            preset,
-            false,
-            false,
-            true,
-            0,
-            None,
-        )?;
-        let report = format!(
-            "SANDBOX_OK preset={} step={} px={} assets=32 guardian_bytes={}\n",
-            preset.cli_name(),
-            step,
-            px,
-            GUARDIAN_EXE_BYTES.len()
-        );
-        let _ = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(root.join("sandbox-report.txt"))
-            .and_then(|mut f| f.write_all(report.as_bytes()));
-        return Ok(());
-    }
-
-    if args.iter().any(|a| a == "--restore") {
-        let (root, _, backup_path) = app_paths()?;
-        let log = BoundedLogger::new(root.join("guardian.log"), false);
-        return perform_validated_restore(
-            &backup_path,
-            Some(&log),
-            || stop_targeted_guardians(&root, Some(&log)),
-            || {
-                reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-                reg_delete_value(CONFIG_SUBKEY, "Preset");
-                unregister_uninstall_entry();
-                let gexe = root.join(GUARDIAN_EXE_NAME);
-                if gexe.exists() {
-                    let _ = fs::remove_file(&gexe);
-                }
-                Ok(())
-            },
-        );
-    }
-
-    if args.iter().any(|a| a == "--restore-system-defaults") {
-        let (root, _, _) = app_paths()?;
-        let log = BoundedLogger::new(root.join("guardian.log"), false);
-        stop_targeted_guardians(&root, Some(&log))?;
-        reset_windows_default_cursors(Some(&log))?;
-        reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-        reg_delete_value(CONFIG_SUBKEY, "Preset");
-        unregister_uninstall_entry();
-        return Ok(());
-    }
-
-    if args.iter().any(|a| a == "--silent") {
-        let preset = parse_preset_arg(&args)?.unwrap_or(Preset::Compact);
-        let no_startup = args.iter().any(|a| a == "--no-startup");
-        let (root, install_dir, backup_path) = app_paths()?;
-        let _ = execute_install_pipeline(
-            &root,
-            &install_dir,
-            &backup_path,
-            preset,
-            !no_startup,
-            true,
-            false,
-            0,
-            None,
-        )?;
-        return Ok(());
-    }
-
-    let (root, _, backup_path) = app_paths()?;
-    let has_existing = backup_path.exists() || root.join(GUARDIAN_EXE_NAME).exists();
-    let initial_preset = parse_preset_arg(&args)?.unwrap_or_else(load_saved_preset);
-
-    let state_ptr = new_gui_state(initial_preset, true, true, has_existing, root);
-    let hwnd = create_setup_window(state_ptr, true)?;
-
-    unsafe {
-        let mut msg: Msg = std::mem::zeroed();
-        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-
-        let mut state = Box::from_raw(state_ptr);
-        if let Some(mut bb) = state.backbuffer.take() {
-            bb.destroy();
-        }
-        state.fonts.destroy();
-        if !state.app_icon.is_null() {
-            DestroyIcon(state.app_icon);
-        }
-        let _ = hwnd;
-    }
-    Ok(())
-}
-
-fn is_headless_invocation(args: &[String]) -> bool {
-    args.iter().any(|a| {
-        a == "--silent"
-            || a == "--restore"
-            || a == "--restore-system-defaults"
-            || a == "--sandbox"
-            || a.starts_with("--sandbox=")
-            || a == "--smoke-ui"
-            || a.starts_with("--smoke-ui=")
-    })
-}
-
-fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
-    let headless = is_headless_invocation(&args);
-    if let Err(err) = run() {
-        eprintln!("{err}");
-        if let Ok((root, _, _)) = app_paths() {
-            let log = BoundedLogger::new(root.join("setup-error.log"), false);
-            log.line(format!("[setup-error] {err}"));
-        }
-        if !headless {
-            let title = wide_z("Modern Inverted Cursors Setup Error");
-            let body = wide_z(&err);
-            unsafe {
-                MessageBoxW(null_mut(), body.as_ptr(), title.as_ptr(), 0x0001_0010);
-            }
-        }
-        std::process::exit(1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_win32_setup_structs_match_sdk() {
-        #[cfg(target_pointer_width = "64")]
-        {
-            assert_eq!(std::mem::size_of::<TrackMouseEvent>(), 24);
-            assert_eq!(std::mem::size_of::<MonitorInfo>(), 40);
-            assert_eq!(std::mem::size_of::<PaintStruct>(), 72);
-            assert_eq!(std::mem::size_of::<BitmapInfoHeader>(), 40);
-        }
-        #[cfg(target_pointer_width = "32")]
-        {
-            assert_eq!(std::mem::size_of::<TrackMouseEvent>(), 16);
-            assert_eq!(std::mem::size_of::<MonitorInfo>(), 40);
-            assert_eq!(std::mem::size_of::<PaintStruct>(), 64);
-            assert_eq!(std::mem::size_of::<BitmapInfoHeader>(), 40);
-        }
-    }
-
-    #[test]
-    fn test_verify_child_readiness_detects_crash_and_timeout() {
-        use std::os::windows::process::CommandExt;
-
-        let ev_crash = NamedReadyEvent::create_unique("setup_crash").unwrap();
-        let child_crash = Command::new("cmd.exe")
-            .creation_flags(modern_inverted_cursor::CREATE_NO_WINDOW)
-            .args(["/C", "exit /B 13"])
-            .spawn()
-            .unwrap();
-        let tmp_log = env::temp_dir().join("mic-test-readiness.log");
-        let _ = fs::write(&tmp_log, "line1\n[error] fake crash\n");
-        let err = verify_child_readiness(child_crash, &ev_crash, 5000, &tmp_log).unwrap_err();
-        assert!(err.contains("exit code 13"));
-        assert!(err.contains("fake crash"));
-
-        let ev_hang = NamedReadyEvent::create_unique("setup_hang").unwrap();
-        let child_hang = Command::new("cmd.exe")
-            .creation_flags(modern_inverted_cursor::CREATE_NO_WINDOW)
-            .args(["/C", "ping -n 4 127.0.0.1 >nul"])
-            .spawn()
-            .unwrap();
-        let err_timeout = verify_child_readiness(child_hang, &ev_hang, 120, &tmp_log).unwrap_err();
-        assert!(err_timeout.contains("did not confirm readiness"));
-        let _ = fs::remove_file(&tmp_log);
-    }
-
-    #[test]
-    fn test_headless_detection_covers_silent_and_automated_flags() {
-        assert!(is_headless_invocation(&["--silent".into(), "--preset".into(), "compact".into()]));
-        assert!(is_headless_invocation(&["--sandbox=C:\\temp".into()]));
-        assert!(is_headless_invocation(&["--restore".into()]));
-        assert!(!is_headless_invocation(&[]));
-    }
-
-    #[test]
-    fn test_embedded_guardian_is_nonempty_pe_binary() {
-        assert!(GUARDIAN_EXE_BYTES.len() > 10_000);
-        assert_eq!(&GUARDIAN_EXE_BYTES[..2], b"MZ");
-        let pe_off = u32::from_le_bytes([
-            GUARDIAN_EXE_BYTES[0x3C],
-            GUARDIAN_EXE_BYTES[0x3D],
-            GUARDIAN_EXE_BYTES[0x3E],
-            GUARDIAN_EXE_BYTES[0x3F],
-        ]) as usize;
-        assert_eq!(&GUARDIAN_EXE_BYTES[pe_off..pe_off + 4], b"PE\0\0");
-        let machine = u16::from_le_bytes([GUARDIAN_EXE_BYTES[pe_off + 4], GUARDIAN_EXE_BYTES[pe_off + 5]]);
-        #[cfg(target_arch = "x86_64")]
-        assert_eq!(machine, 0x8664);
-        #[cfg(target_arch = "aarch64")]
-        assert_eq!(machine, 0xAA64);
-        #[cfg(target_arch = "x86")]
-        assert_eq!(machine, 0x014C);
-    }
 }

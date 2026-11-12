@@ -9,21 +9,26 @@ fn main() {
     let candidate = if let Some(explicit) = env::var_os("GUARDIAN_EMBED_PATH") {
         PathBuf::from(explicit)
     } else if target_arch == "aarch64" {
-        let arm = manifest_dir.join("dist/ModernInvertedCursorGuardian-arm64.exe");
+        let arm = manifest_dir.join("dist/ModernInvertedCursors-Guardian-arm64.exe");
         if arm.is_file() {
             arm
         } else {
-            manifest_dir.join("dist/ModernInvertedCursorGuardian.exe")
+            manifest_dir.join("dist/ModernInvertedCursors-Guardian-x64.exe")
         }
     } else if target_arch == "x86" {
-        let legacy_x86 = manifest_dir.join("dist/ModernInvertedCursorGuardian-win7-win10-x86.exe");
+        let legacy_x86 = manifest_dir.join("dist/ModernInvertedCursors-Guardian-win7-win10-x86.exe");
         if legacy_x86.is_file() {
             legacy_x86
         } else {
-            manifest_dir.join("dist/ModernInvertedCursorGuardian.exe")
+            manifest_dir.join("dist/ModernInvertedCursors-Guardian-x64.exe")
         }
     } else {
-        manifest_dir.join("dist/ModernInvertedCursorGuardian.exe")
+        let x64 = manifest_dir.join("dist/ModernInvertedCursors-Guardian-x64.exe");
+        if x64.is_file() {
+            x64
+        } else {
+            manifest_dir.join("dist/ModernInvertedCursorGuardian.exe")
+        }
     };
 
     println!("cargo:rerun-if-changed={}", candidate.display());

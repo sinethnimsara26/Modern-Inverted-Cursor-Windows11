@@ -48,3 +48,19 @@ Confirmed 14 distinct defects across baseline (`BUG-01` through `BUG-14`), inclu
    - `cargo test` (`1.99.0` x64): **`16/16 PASSED`** (`11` lib + `1` guardian + `4` setup).
    - `cargo +1.75.0 test --target x86_64-pc-windows-msvc`: **`16/16 PASSED`**.
    - `cargo +1.75.0 test --target i686-pc-windows-msvc`: **`16/16 PASSED`**.
+
+---
+
+## Batch 03 — Installer/Guardian Architecture Separation, Refactor & Packaging (`v1.1.0-rc.1`)
+
+1. **Observed Problem (`BUG-11` & monolithic maintainability):** `src/lib.rs` (2,400+ lines) and `src/bin/setup.rs` (2,800+ lines) mixed unrelated responsibilities; Guardian owned `--uninstall` and `UninstallString` instead of Setup; `NoModify=1` disabled Windows Installed Apps maintenance; release/installed artifact names weren't uniformly standardized.
+2. **Architectural Changes (ADR-001, ADR-002):**
+   - Decomposed `src/lib.rs` into 6 focused modules: `registry.rs`, `assets.rs`, `cursors.rs`, `backup.rs`, `ipc.rs`, `render.rs`.
+   - Split `src/bin/setup.rs` into `src/bin/setup/{main.rs, install.rs, ui.rs}` cleanly.
+   - Bumped `Cargo.toml` to `1.1.0-rc.1` with binaries `ModernInvertedCursors-Setup` and `ModernInvertedCursors-Guardian` producing `ModernInvertedCursors-Setup-v1.1.0-rc.1-<arch>.exe` and `ModernInvertedCursors-Guardian-v1.1.0-rc.1-<arch>.exe`.
+   - Setup now deploys BOTH persistent `ModernInvertedCursors-Setup.exe` (`UninstallString`, `QuietUninstallString`, `ModifyPath`, `NoModify=0`, `NoRepair=0`) and `ModernInvertedCursors-Guardian.exe`, dynamically computes `EstimatedSize` KB, and migrates from `v1.0.0–v1.0.2` (`cleanup_legacy_guardian_binary`, legacy `Run` key cleanup) while preserving valid `backup-original.reg`.
+   - Guardian tray menu delegates **"Open Setup & Maintenance..."** (`--modify`) and **"Restore Original Cursors..."** (`--uninstall`) to installed `ModernInvertedCursors-Setup.exe`, retaining standalone safe fallback only when Setup is absent.
+   - Updated `.github/workflows/ci-and-release.yml` to run CI on `hardening/**` branches and mark `-rc` tags `--prerelease` automatically.
+3. **Tests Executed:**
+   - Added 3 new tests (`ASSETS.len() == 32`, `test_detect_and_migrate_legacy_v1_preserves_valid_backup`, `test_sync_setup_maintenance_copy_skips_same_path_and_copies_external`).
+   - `build.ps1` release build + `18/18` tests passed across `x64` (`1.99.0`), `win7-win10-x64` (`1.75.0`), and `win7-win10-x86` (`1.75.0`).

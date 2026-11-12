@@ -12,9 +12,9 @@
 | Batch | Scope | Status | Commit SHA |
 | :--- | :--- | :--- | :--- |
 | **Batch 01** | Baseline audit, research, benchmarks & docs scaffolding | **DONE** | `fa421bb` |
-| **Batch 02** | Critical installation readiness, safe restore/uninstall, silent error propagation & targeted guardian IPC | **DONE** | *(pending commit)* |
-| **Batch 03** | Clean Setup / Guardian separation, module refactor, migration & `ModernInvertedCursors-*` naming | **IN PROGRESS** | — |
-| **Batch 04** | Security, `build.rs` fail-closed gate, WinHTTP timeouts/size-caps/session reuse, FFI & atomic apply fixes | **PENDING** | — |
+| **Batch 02** | Critical installation readiness, safe restore/uninstall, silent error propagation & targeted guardian IPC | **DONE** | `80f8341` |
+| **Batch 03** | Clean Setup / Guardian separation, module refactor, migration & `ModernInvertedCursors-*` naming | **DONE** | *(pending commit)* |
+| **Batch 04** | Security, `build.rs` fail-closed gate, WinHTTP timeouts/size-caps/session reuse, System32 DLL pinning & atomic apply | **IN PROGRESS** | — |
 | **Batch 05** | Guardian memory, handle, GDI & CPU wakeup optimization | **PENDING** | — |
 | **Batch 06** | Setup UI dirty-region / static-surface caching, timer stop-when-idle & DPI/keyboard accessibility | **PENDING** | — |
 | **Batch 07** | Comprehensive unit, integration, UI Automation interaction, multi-DPI (`100–200%`) & failure-injection tests | **PENDING** | — |
