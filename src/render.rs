@@ -274,6 +274,67 @@ pub fn draw_cursor_glyph(
     }
 }
 
+/// Pre-rasterized premultiplied ARGB (`0xAARRGGBB`) cursor glyph sprite cached per DPI/size
+/// so interactive UI repaints composite via fast integer alpha blending without re-running
+/// per-pixel 4x4 polygon distance math.
+#[derive(Clone)]
+pub struct CursorGlyphSprite {
+    pub size: i32,
+    pub premul: Vec<u32>,
+}
+
+impl CursorGlyphSprite {
+    pub fn rasterize(size: i32, preset: Preset, paused: bool) -> Self {
+        let side = size.max(1) as usize;
+        let mut premul = vec![0u32; side * side];
+        draw_cursor_glyph(&mut premul, side, 0, 0, size, preset, paused, true);
+        Self { size, premul }
+    }
+
+    pub fn blit_onto(&self, pixels: &mut [u32], stride: usize, x0: i32, y0: i32) {
+        if self.size <= 0 {
+            return;
+        }
+        let side = self.size as usize;
+        for dy in 0..self.size {
+            let py = y0 + dy;
+            if py < 0 {
+                continue;
+            }
+            let row_dst = py as usize * stride;
+            if row_dst >= pixels.len() {
+                break;
+            }
+            let row_src = dy as usize * side;
+            for dx in 0..self.size {
+                let px = x0 + dx;
+                if px < 0 || px as usize >= stride {
+                    continue;
+                }
+                let idx = row_dst + px as usize;
+                if idx >= pixels.len() {
+                    continue;
+                }
+                let src = self.premul[row_src + dx as usize];
+                let a = (src >> 24) & 0xFF;
+                if a == 0 {
+                    continue;
+                }
+                if a == 255 {
+                    pixels[idx] = 0xFF00_0000 | (src & 0x00FF_FFFF);
+                    continue;
+                }
+                let inv = 255 - a;
+                let dst = pixels[idx];
+                let out_r = (((src >> 16) & 0xFF) + (((dst >> 16) & 0xFF) * inv + 127) / 255).min(255);
+                let out_g = (((src >> 8) & 0xFF) + (((dst >> 8) & 0xFF) * inv + 127) / 255).min(255);
+                let out_b = ((src & 0xFF) + ((dst & 0xFF) * inv + 127) / 255).min(255);
+                pixels[idx] = 0xFF00_0000 | (out_r << 16) | (out_g << 8) | out_b;
+            }
+        }
+    }
+}
+
 pub fn create_split_cursor_hicon(size: usize, preset: Preset, paused: bool) -> *mut c_void {
     let bmi = BitmapInfoHeader {
         bi_size: std::mem::size_of::<BitmapInfoHeader>() as u32,

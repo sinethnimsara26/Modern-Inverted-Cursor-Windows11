@@ -1,8 +1,8 @@
 use crate::install::{start_install_worker, GUARDIAN_EXE_BYTES};
 use crate::{ControlId, GuiState, HitZone, Screen, WorkerTarget, WorkerUpdate, TIMER_ANIM};
 use modern_inverted_cursor::{
-    balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step,
-    draw_cursor_glyph, load_system_dll, wide_z, Preset, ACCESSIBILITY_STEPS, APP_VERSION,
+    balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step, load_system_dll,
+    trim_working_set, wide_z, CursorGlyphSprite, Preset, ACCESSIBILITY_STEPS, APP_VERSION,
     PACK_VERSION,
 };
 use std::{
@@ -37,8 +37,15 @@ const WM_DPICHANGED: u32 = 0x02E0;
 const WM_APP: u32 = 0x8000;
 const WM_APP_WORKER_UPDATE: u32 = WM_APP + 10;
 
+const VK_TAB: usize = 0x09;
 const VK_RETURN: usize = 0x0D;
+const VK_SHIFT: i32 = 0x10;
 const VK_ESCAPE: usize = 0x1B;
+const VK_SPACE: usize = 0x20;
+const VK_LEFT: usize = 0x25;
+const VK_UP: usize = 0x26;
+const VK_RIGHT: usize = 0x27;
+const VK_DOWN: usize = 0x28;
 const GWLP_USERDATA: i32 = -21;
 
 const WS_OVERLAPPEDWINDOW_FIXED: u32 = 0x00CA_0000;
@@ -229,6 +236,7 @@ extern "system" {
     fn LoadCursorW(h_instance: *mut c_void, lp_cursor_name: *const u16) -> *mut c_void;
     fn SetCursor(h_cursor: *mut c_void) -> *mut c_void;
     fn TrackMouseEvent(lp_event_track: *mut TrackMouseEvent) -> i32;
+    fn GetKeyState(n_virt_key: i32) -> i16;
     pub fn SetTimer(
         h_wnd: *mut c_void,
         n_id_event: usize,
@@ -497,6 +505,81 @@ fn fill_round_rect(
             buf[row + px] = blend_px(buf[row + px], col, cov);
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stroke_round_rect(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    x: i32,
+    y: i32,
+    rw: i32,
+    rh: i32,
+    radius: f32,
+    stroke_rgb: u32,
+    stroke_px: f32,
+) {
+    if rw <= 0 || rh <= 0 || stroke_px <= 0.0 {
+        return;
+    }
+    let hw = rw as f32 * 0.5;
+    let hh = rh as f32 * 0.5;
+    let cx = x as f32 + hw;
+    let cy = y as f32 + hh;
+    let r = radius.min(hw).min(hh);
+    let half = stroke_px * 0.5;
+
+    let pad = (half + 2.0).ceil() as i32;
+    let x0 = (x - pad).max(0) as usize;
+    let y0 = (y - pad).max(0) as usize;
+    let x1 = (x + rw + pad).min(w as i32) as usize;
+    let y1 = (y + rh + pad).min(h as i32) as usize;
+
+    for py in y0..y1 {
+        let row = py * w;
+        for px in x0..x1 {
+            let d = sdf_round_box(px as f32 + 0.5, py as f32 + 0.5, cx, cy, hw, hh, r);
+            let ring_dist = d.abs() - half;
+            if ring_dist >= 0.75 {
+                continue;
+            }
+            let cov = (0.75 - ring_dist).clamp(0.0, 1.0);
+            buf[row + px] = blend_px(buf[row + px], stroke_rgb, cov);
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct GlyphSpriteCache {
+    size: i32,
+    sprites: Option<[CursorGlyphSprite; 4]>,
+}
+
+impl GlyphSpriteCache {
+    pub fn clear(&mut self) {
+        self.size = 0;
+        self.sprites = None;
+    }
+
+    fn sprites_for(&mut self, size: i32) -> &[CursorGlyphSprite; 4] {
+        let sz = size.max(1);
+        if self.size != sz || self.sprites.is_none() {
+            let list = [
+                CursorGlyphSprite::rasterize(sz, Preset::ALL[0], false),
+                CursorGlyphSprite::rasterize(sz, Preset::ALL[1], false),
+                CursorGlyphSprite::rasterize(sz, Preset::ALL[2], false),
+                CursorGlyphSprite::rasterize(sz, Preset::ALL[3], false),
+            ];
+            self.size = sz;
+            self.sprites = Some(list);
+        }
+        self.sprites.as_ref().unwrap()
+    }
+}
+
+fn preset_glyph_index(preset: Preset) -> usize {
+    Preset::ALL.iter().position(|&p| p == preset).unwrap_or(0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -802,11 +885,18 @@ pub fn render_ui(state: &mut GuiState) {
         }
     }
 
-    let bb = match state.backbuffer.as_mut() {
+    let glyph_sz = s(34, dpi);
+    let _ = state.glyph_cache.sprites_for(glyph_sz);
+    let (sprites, bb_opt, hits) = (
+        state.glyph_cache.sprites.as_ref().unwrap(),
+        state.backbuffer.as_mut(),
+        &mut state.hits,
+    );
+    let bb = match bb_opt {
         Some(b) => b,
         None => return,
     };
-    state.hits.clear();
+    hits.clear();
 
     {
         let buf = unsafe { bb.pixels_mut() };
@@ -832,15 +922,11 @@ pub fn render_ui(state: &mut GuiState) {
             0x2D374B,
             1.2,
         );
-        draw_cursor_glyph(
+        sprites[preset_glyph_index(Preset::Regular)].blit_onto(
             buf,
             cw,
             s(29, dpi),
             s(25, dpi),
-            s(34, dpi),
-            Preset::Regular,
-            false,
-            false,
         );
 
         fill_round_rect(
@@ -927,16 +1013,11 @@ pub fn render_ui(state: &mut GuiState) {
                         Some((if selected { 0x2F5AA8 } else { 0x273041 }, 1.1)),
                     );
 
-                    let glyph_sz = s(34, dpi);
-                    draw_cursor_glyph(
+                    sprites[idx].blit_onto(
                         buf,
                         cw,
                         ccx as i32 - glyph_sz / 2,
                         ccy as i32 - glyph_sz / 2,
-                        glyph_sz,
-                        *preset,
-                        false,
-                        false,
                     );
 
                     if *preset == Preset::Compact {
@@ -954,8 +1035,22 @@ pub fn render_ui(state: &mut GuiState) {
                             1.0,
                         );
                     }
+                    if state.focus == Some(ControlId::PresetCard(idx)) {
+                        stroke_round_rect(
+                            buf,
+                            cw,
+                            ch,
+                            cx - 2,
+                            cy - 2,
+                            card_w + 4,
+                            card_h + 4,
+                            s(14, dpi) as f32,
+                            0x93C5FD,
+                            2.0,
+                        );
+                    }
 
-                    state.hits.push(HitZone {
+                    hits.push(HitZone {
                         id: ControlId::PresetCard(idx),
                         rect: Rect {
                             left: cx,
@@ -1005,7 +1100,21 @@ pub fn render_ui(state: &mut GuiState) {
                     state.startup,
                     state.hover == Some(ControlId::ToggleStartup),
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::ToggleStartup) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        sw_x - 3,
+                        opt_y + s(16, dpi) - 3,
+                        sw_w + 6,
+                        sw_h + 6,
+                        sw_h as f32 * 0.5 + 3.0,
+                        0x93C5FD,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::ToggleStartup,
                     rect: Rect {
                         left: s(24, dpi),
@@ -1026,7 +1135,21 @@ pub fn render_ui(state: &mut GuiState) {
                     state.register_uninstall,
                     state.hover == Some(ControlId::ToggleUninstall),
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::ToggleUninstall) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        sw_x - 3,
+                        opt_y + s(70, dpi) - 3,
+                        sw_w + 6,
+                        sw_h + 6,
+                        sw_h as f32 * 0.5 + 3.0,
+                        0x93C5FD,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::ToggleUninstall,
                     rect: Rect {
                         left: s(24, dpi),
@@ -1059,7 +1182,21 @@ pub fn render_ui(state: &mut GuiState) {
                         0x364154,
                         1.1,
                     );
-                    state.hits.push(HitZone {
+                    if state.focus == Some(ControlId::BtnRestore) {
+                        stroke_round_rect(
+                            buf,
+                            cw,
+                            ch,
+                            s(304, dpi) - 2,
+                            s(480, dpi) - 2,
+                            s(144, dpi) + 4,
+                            s(40, dpi) + 4,
+                            s(11, dpi) as f32,
+                            0x93C5FD,
+                            2.0,
+                        );
+                    }
+                    hits.push(HitZone {
                         id: ControlId::BtnRestore,
                         rect: Rect {
                             left: s(304, dpi),
@@ -1092,7 +1229,21 @@ pub fn render_ui(state: &mut GuiState) {
                     0x60A5FA,
                     1.0,
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::BtnInstall) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        s(458, dpi) - 2,
+                        s(480, dpi) - 2,
+                        s(138, dpi) + 4,
+                        s(40, dpi) + 4,
+                        s(11, dpi) as f32,
+                        0xFFFFFF,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::BtnInstall,
                     rect: Rect {
                         left: s(458, dpi),
@@ -1287,7 +1438,21 @@ pub fn render_ui(state: &mut GuiState) {
                     0x364154,
                     1.1,
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::BtnOpenFolder) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        s(328, dpi) - 2,
+                        s(480, dpi) - 2,
+                        s(128, dpi) + 4,
+                        s(40, dpi) + 4,
+                        s(11, dpi) as f32,
+                        0x93C5FD,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::BtnOpenFolder,
                     rect: Rect {
                         left: s(328, dpi),
@@ -1312,7 +1477,21 @@ pub fn render_ui(state: &mut GuiState) {
                     0x60A5FA,
                     1.0,
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::BtnFinish) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        s(468, dpi) - 2,
+                        s(480, dpi) - 2,
+                        s(128, dpi) + 4,
+                        s(40, dpi) + 4,
+                        s(11, dpi) as f32,
+                        0xFFFFFF,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::BtnFinish,
                     rect: Rect {
                         left: s(468, dpi),
@@ -1824,6 +2003,84 @@ fn hit_test(hits: &[HitZone], x: i32, y: i32) -> Option<ControlId> {
     None
 }
 
+pub fn focus_order(
+    screen: Screen,
+    has_existing: bool,
+    _worker_error: bool,
+    _is_restore: bool,
+) -> Vec<ControlId> {
+    match screen {
+        Screen::Setup => {
+            let mut order = vec![
+                ControlId::PresetCard(0),
+                ControlId::PresetCard(1),
+                ControlId::PresetCard(2),
+                ControlId::PresetCard(3),
+                ControlId::ToggleStartup,
+                ControlId::ToggleUninstall,
+            ];
+            if has_existing {
+                order.push(ControlId::BtnRestore);
+            }
+            order.push(ControlId::BtnInstall);
+            order
+        }
+        Screen::Working => Vec::new(),
+        Screen::Done => vec![ControlId::BtnOpenFolder, ControlId::BtnFinish],
+    }
+}
+
+unsafe fn activate_control(hwnd: *mut c_void, ptr: *mut GuiState, ctrl: ControlId) -> bool {
+    let state = &mut *ptr;
+    match ctrl {
+        ControlId::PresetCard(i) => {
+            if let Some(p) = Preset::ALL.get(i) {
+                state.preset = *p;
+                state.dirty = true;
+            }
+        }
+        ControlId::ToggleStartup => {
+            state.startup = !state.startup;
+            state.dirty = true;
+        }
+        ControlId::ToggleUninstall => {
+            state.register_uninstall = !state.register_uninstall;
+            state.dirty = true;
+        }
+        ControlId::BtnInstall => {
+            start_install_worker(state, false);
+            return true;
+        }
+        ControlId::BtnRestore => {
+            let title = wide_z("Restore & Uninstall Modern Inverted Cursors");
+            let text = wide_z(
+                "Validate your original cursor backup, restore Windows cursors, remove startup launch, and uninstall?",
+            );
+            let ans = MessageBoxW(
+                hwnd,
+                text.as_ptr(),
+                title.as_ptr(),
+                MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND,
+            );
+            if ans == IDYES {
+                start_install_worker(&mut *ptr, true);
+            }
+            return true;
+        }
+        ControlId::BtnOpenFolder => {
+            let dir = state.install_root.clone();
+            let op = wide_z("open");
+            let target = wide_z(&dir.to_string_lossy());
+            ShellExecuteW(hwnd, op.as_ptr(), target.as_ptr(), null(), null(), SW_SHOW);
+        }
+        ControlId::BtnFinish => {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            return true;
+        }
+    }
+    false
+}
+
 unsafe extern "system" fn wnd_proc(
     hwnd: *mut c_void,
     msg: u32,
@@ -1853,7 +2110,10 @@ unsafe extern "system" fn wnd_proc(
             let state = &mut *ptr;
             let mut ps: PaintStruct = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
-            render_ui(state);
+            if state.dirty || state.backbuffer.is_none() {
+                render_ui(state);
+                state.dirty = false;
+            }
             if let Some(bb) = state.backbuffer.as_ref() {
                 BitBlt(
                     hdc,
@@ -1868,6 +2128,10 @@ unsafe extern "system" fn wnd_proc(
                 );
             }
             EndPaint(hwnd, &ps);
+            if !state.trimmed_initial {
+                state.trimmed_initial = true;
+                trim_working_set();
+            }
             return 0;
         }
         WM_SETCURSOR => {
@@ -1898,6 +2162,7 @@ unsafe extern "system" fn wnd_proc(
             let next_hover = hit_test(&state.hits, x, y);
             if next_hover != state.hover {
                 state.hover = next_hover;
+                state.dirty = true;
                 InvalidateRect(hwnd, null(), 0);
             }
             return 0;
@@ -1908,6 +2173,7 @@ unsafe extern "system" fn wnd_proc(
             if state.hover.is_some() || state.pressed.is_some() {
                 state.hover = None;
                 state.pressed = None;
+                state.dirty = true;
                 InvalidateRect(hwnd, null(), 0);
             }
             return 0;
@@ -1916,8 +2182,13 @@ unsafe extern "system" fn wnd_proc(
             let state = &mut *ptr;
             let x = ((l_param as i32 & 0xFFFF) as i16) as i32;
             let y = (((l_param as i32 >> 16) & 0xFFFF) as i16) as i32;
-            state.pressed = hit_test(&state.hits, x, y);
-            InvalidateRect(hwnd, null(), 0);
+            let hit = hit_test(&state.hits, x, y);
+            if state.pressed != hit || state.focus.is_some() {
+                state.pressed = hit;
+                state.focus = None;
+                state.dirty = true;
+                InvalidateRect(hwnd, null(), 0);
+            }
             return 0;
         }
         WM_LBUTTONUP => {
@@ -1927,55 +2198,20 @@ unsafe extern "system" fn wnd_proc(
                 let state = &mut *ptr;
                 let h = hit_test(&state.hits, x, y);
                 let match_click = if h == state.pressed { h } else { None };
-                state.pressed = None;
+                if state.pressed.is_some() {
+                    state.pressed = None;
+                    state.dirty = true;
+                }
                 match_click
             };
             if let Some(ctrl) = clicked {
-                match ctrl {
-                    ControlId::PresetCard(i) => {
-                        if let Some(p) = Preset::ALL.get(i) {
-                            (*ptr).preset = *p;
-                        }
-                    }
-                    ControlId::ToggleStartup => {
-                        (*ptr).startup = !(*ptr).startup;
-                    }
-                    ControlId::ToggleUninstall => {
-                        (*ptr).register_uninstall = !(*ptr).register_uninstall;
-                    }
-                    ControlId::BtnInstall => {
-                        start_install_worker(&mut *ptr, false);
-                        return 0;
-                    }
-                    ControlId::BtnRestore => {
-                        let title = wide_z("Restore & Uninstall Modern Inverted Cursors");
-                        let text = wide_z(
-                            "Validate your original cursor backup, restore Windows cursors, remove startup launch, and uninstall?",
-                        );
-                        let ans = MessageBoxW(
-                            hwnd,
-                            text.as_ptr(),
-                            title.as_ptr(),
-                            MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND,
-                        );
-                        if ans == IDYES {
-                            start_install_worker(&mut *ptr, true);
-                        }
-                        return 0;
-                    }
-                    ControlId::BtnOpenFolder => {
-                        let dir = (*ptr).install_root.clone();
-                        let op = wide_z("open");
-                        let target = wide_z(&dir.to_string_lossy());
-                        ShellExecuteW(hwnd, op.as_ptr(), target.as_ptr(), null(), null(), SW_SHOW);
-                    }
-                    ControlId::BtnFinish => {
-                        PostMessageW(hwnd, WM_CLOSE, 0, 0);
-                        return 0;
-                    }
+                if activate_control(hwnd, ptr, ctrl) {
+                    return 0;
                 }
             }
-            InvalidateRect(hwnd, null(), 0);
+            if (*ptr).dirty {
+                InvalidateRect(hwnd, null(), 0);
+            }
             return 0;
         }
         WM_APP_WORKER_UPDATE => {
@@ -1987,15 +2223,22 @@ unsafe extern "system" fn wnd_proc(
                 if !u.install_root.as_os_str().is_empty() {
                     state.install_root = u.install_root.clone();
                 }
+                state.dirty = true;
                 if u.finished {
                     KillTimer(hwnd, TIMER_ANIM);
+                    state.anim_active = false;
                     state.anim_pct = 1.0;
                     state.worker_error = u.error.clone();
                     state.is_restore = u.is_restore;
                     state.current_step = u.applied_step;
                     state.current_px = u.applied_px;
                     state.has_existing_install = !u.is_restore && u.error.is_none();
+                    state.focus = None;
                     state.screen = Screen::Done;
+                    trim_working_set();
+                } else if (state.target_pct - state.anim_pct).abs() > 0.002 && !state.anim_active {
+                    SetTimer(hwnd, TIMER_ANIM, 30, null_mut());
+                    state.anim_active = true;
                 }
             }
             InvalidateRect(hwnd, null(), 0);
@@ -2006,7 +2249,12 @@ unsafe extern "system" fn wnd_proc(
             let diff = state.target_pct - state.anim_pct;
             if diff.abs() > 0.002 {
                 state.anim_pct += diff * 0.25;
+                state.dirty = true;
                 InvalidateRect(hwnd, null(), 0);
+            } else {
+                state.anim_pct = state.target_pct;
+                KillTimer(hwnd, TIMER_ANIM);
+                state.anim_active = false;
             }
             return 0;
         }
@@ -2016,13 +2264,107 @@ unsafe extern "system" fn wnd_proc(
                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 return 0;
             }
-            if w_param == VK_RETURN {
-                match state.screen {
-                    Screen::Setup => start_install_worker(state, false),
-                    Screen::Done => {
-                        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            if state.screen == Screen::Working {
+                return 0;
+            }
+            if w_param == VK_TAB {
+                let order = focus_order(
+                    state.screen,
+                    state.has_existing_install,
+                    state.worker_error.is_some(),
+                    state.is_restore,
+                );
+                if !order.is_empty() {
+                    let shift = GetKeyState(VK_SHIFT) < 0;
+                    let next = match state.focus.and_then(|f| order.iter().position(|&c| c == f)) {
+                        Some(pos) => {
+                            if shift {
+                                order[(pos + order.len() - 1) % order.len()]
+                            } else {
+                                order[(pos + 1) % order.len()]
+                            }
+                        }
+                        None => {
+                            if shift {
+                                order[order.len() - 1]
+                            } else {
+                                order[0]
+                            }
+                        }
+                    };
+                    state.focus = Some(next);
+                    state.dirty = true;
+                    InvalidateRect(hwnd, null(), 0);
+                }
+                return 0;
+            }
+            if matches!(w_param, VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN) && state.screen == Screen::Setup {
+                let cur_idx = match state.focus {
+                    Some(ControlId::PresetCard(i)) => i,
+                    Some(ControlId::BtnRestore) if matches!(w_param, VK_LEFT | VK_RIGHT) => {
+                        state.focus = Some(ControlId::BtnInstall);
+                        state.dirty = true;
+                        InvalidateRect(hwnd, null(), 0);
+                        return 0;
                     }
-                    Screen::Working => {}
+                    Some(ControlId::BtnInstall) if state.has_existing_install && matches!(w_param, VK_LEFT | VK_RIGHT) => {
+                        state.focus = Some(ControlId::BtnRestore);
+                        state.dirty = true;
+                        InvalidateRect(hwnd, null(), 0);
+                        return 0;
+                    }
+                    _ => Preset::ALL.iter().position(|&p| p == state.preset).unwrap_or(0),
+                };
+                let next_idx = if w_param == VK_LEFT || w_param == VK_RIGHT {
+                    cur_idx ^ 1
+                } else {
+                    cur_idx ^ 2
+                };
+                state.preset = Preset::ALL[next_idx];
+                state.focus = Some(ControlId::PresetCard(next_idx));
+                state.dirty = true;
+                InvalidateRect(hwnd, null(), 0);
+                return 0;
+            }
+            if matches!(w_param, VK_LEFT | VK_RIGHT) && state.screen == Screen::Done {
+                state.focus = Some(match state.focus {
+                    Some(ControlId::BtnOpenFolder) => ControlId::BtnFinish,
+                    _ => ControlId::BtnOpenFolder,
+                });
+                state.dirty = true;
+                InvalidateRect(hwnd, null(), 0);
+                return 0;
+            }
+            if w_param == VK_SPACE {
+                if let Some(ctrl) = state.focus {
+                    if !activate_control(hwnd, ptr, ctrl) && (*ptr).dirty {
+                        InvalidateRect(hwnd, null(), 0);
+                    }
+                    return 0;
+                }
+            }
+            if w_param == VK_RETURN {
+                match state.focus {
+                    Some(
+                        ctrl @ (ControlId::ToggleStartup
+                        | ControlId::ToggleUninstall
+                        | ControlId::BtnRestore
+                        | ControlId::BtnInstall
+                        | ControlId::BtnOpenFolder
+                        | ControlId::BtnFinish),
+                    ) => {
+                        if !activate_control(hwnd, ptr, ctrl) && (*ptr).dirty {
+                            InvalidateRect(hwnd, null(), 0);
+                        }
+                        return 0;
+                    }
+                    _ => match state.screen {
+                        Screen::Setup => start_install_worker(state, false),
+                        Screen::Done => {
+                            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                        }
+                        Screen::Working => {}
+                    },
                 }
                 return 0;
             }
@@ -2032,6 +2374,8 @@ unsafe extern "system" fn wnd_proc(
             state.dpi = (w_param & 0xFFFF) as u32;
             state.fonts.destroy();
             state.fonts = FontSet::create(state.dpi);
+            state.glyph_cache.clear();
+            state.dirty = true;
             let mut rc = Rect {
                 left: 0,
                 top: 0,
@@ -2180,7 +2524,11 @@ pub fn new_gui_state(
         current_px: px,
         hover: None,
         pressed: None,
+        focus: None,
         tracking_mouse: false,
+        dirty: true,
+        anim_active: false,
+        trimmed_initial: false,
         hits: Vec::new(),
         anim_pct: 0.0,
         target_pct: 0.0,
@@ -2205,6 +2553,7 @@ pub fn new_gui_state(
             install_root: PathBuf::new(),
         })),
         fonts: dummy_fonts,
+        glyph_cache: GlyphSpriteCache::default(),
         backbuffer: None,
         app_icon: create_split_cursor_hicon(32, Preset::Regular, false),
     }))
@@ -2223,7 +2572,8 @@ pub fn bring_existing_setup_to_front() -> bool {
     false
 }
 
-pub fn run_smoke_ui(out_dir: &Path) -> Result<(), String> {
+pub fn run_smoke_ui(out_dir: &Path, dpi_override: Option<u32>) -> Result<(), String> {
+    let _ = fs::create_dir_all(out_dir);
     let state_ptr = new_gui_state(
         Preset::Compact,
         true,
@@ -2235,11 +2585,29 @@ pub fn run_smoke_ui(out_dir: &Path) -> Result<(), String> {
     let hwnd = create_setup_window(state_ptr, false)?;
     unsafe {
         let state = &mut *state_ptr;
+        if let Some(dpi) = dpi_override {
+            let clamped = dpi.clamp(96, 240);
+            if clamped != state.dpi {
+                state.dpi = clamped;
+                state.fonts.destroy();
+                state.fonts = FontSet::create(clamped);
+                state.glyph_cache.clear();
+            }
+        }
+
         state.screen = Screen::Setup;
+        state.focus = None;
         render_ui(state);
         if let Some(bb) = state.backbuffer.as_ref() {
             save_backbuffer_bmp(bb, &out_dir.join("01_setup_dark.bmp"))?;
         }
+
+        state.focus = Some(ControlId::PresetCard(2));
+        render_ui(state);
+        if let Some(bb) = state.backbuffer.as_ref() {
+            save_backbuffer_bmp(bb, &out_dir.join("04_setup_focus_dark.bmp"))?;
+        }
+        state.focus = None;
 
         state.screen = Screen::Working;
         state.anim_pct = 0.64;

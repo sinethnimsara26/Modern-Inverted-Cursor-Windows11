@@ -15,9 +15,9 @@
 | **Batch 02** | Critical installation readiness, safe restore/uninstall, silent error propagation & targeted guardian IPC | **DONE** | `80f8341` |
 | **Batch 03** | Clean Setup / Guardian separation, module refactor, migration & `ModernInvertedCursors-*` naming | **DONE** | `070e4a6` |
 | **Batch 04** | Security, `build.rs` fail-closed gate, WinHTTP timeouts/size-caps/session reuse, System32 DLL pinning & atomic apply | **DONE** | `2b5c067` |
-| **Batch 05** | Guardian memory, handle, GDI & CPU wakeup optimization | **DONE** | *(pending commit)* |
-| **Batch 06** | Setup UI dirty-region / static-surface caching, timer stop-when-idle & DPI/keyboard accessibility | **IN PROGRESS** | — |
-| **Batch 07** | Comprehensive unit, integration, UI Automation interaction, multi-DPI (`100–200%`) & failure-injection tests | **PENDING** | — |
+| **Batch 05** | Guardian memory, handle, GDI & CPU wakeup optimization | **DONE** | `6b77c81` |
+| **Batch 06** | Setup UI dirty-region / static-surface caching, timer stop-when-idle & DPI/keyboard accessibility | **DONE** | *(pending commit)* |
+| **Batch 07** | Comprehensive unit, integration, UI Automation interaction, multi-DPI (`100–200%`) & failure-injection tests | **IN PROGRESS** | — |
 | **Batch 08** | Final regression audit, CI green verification across all 4 targets, draft PR & `v1.1.0-rc.1` | **PENDING** | — |
 
 ---
@@ -32,4 +32,4 @@
   - Startup `HKCU\...\Run\ModernInvertedCursorGuardian` enabled
 
 ## Immediate Next Action
-Proceed to **Batch 06** (`src/bin/setup/ui.rs` static preset-cursor glyph caching, dirty-only `WM_PAINT` `BitBlt`, stop `TIMER_ANIM` when settled, working-set trim, and full `Tab`/`Arrow`/`Space`/`Enter` keyboard navigation + focus ring).
+Proceed to **Batch 07**: run comprehensive isolated integration tests (`--silent` error exit codes/logs, `--sandbox`, corrupt `.reg` fail-safe, `v1.0.2` migration), sandbox Guardian endurance/Explorer-restart check, multi-DPI (`96/120/144/192 DPI`) visual checks, and real interactive Setup GUI automation testing.

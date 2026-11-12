@@ -432,6 +432,9 @@ pub fn start_install_worker(state: &mut crate::GuiState, is_restore: bool) {
     let startup = state.startup;
     let reg_un = state.register_uninstall;
 
+    state.anim_active = true;
+    state.dirty = true;
+
     // SAFETY: `state.hwnd` is valid while `GuiState` lives in UI thread.
     unsafe {
         crate::ui::SetTimer(state.hwnd, crate::TIMER_ANIM, 30, std::ptr::null_mut());

@@ -42,4 +42,13 @@
   - Batch 05 Sandbox Guardian (`PID 9040`, 3s idle): **`0.75 MB` WS (`782,336 B`, -62.9%)**, `1.52 MB` Private (`1,593,344 B`), **`116` Handles (-6)**, `4` Threads.
   - Sandbox startup-to-ready latency: First cold AV-scan run `3,108.1 ms`; subsequent 3 warm launches **`233.9 ms`, `66.1 ms`, `71.0 ms` (median `71.0 ms`)**.
 
-*(Setup GUI optimizations will be measured and populated in Batches 06–07.)*
+### Batch 06 — Setup GUI Repaint Caching, Timer Discipline, Working-Set Trim & Keyboard Accessibility
+- **Changes:**
+  - `CursorGlyphSprite` + `GlyphSpriteCache`: pre-rasterizes 4×4 supersampled SDF cursor glyphs once per DPI and composites via fixed-point integer alpha blending instead of running half a million floating-point segment distance evaluations on every hover repaint.
+  - `GuiState.dirty`: `WM_PAINT` skips full `render_ui()` on clean OS expose / Alt+Tab paints and performs a single `BitBlt` from the retained `Backbuffer`.
+  - `TIMER_ANIM` auto-stop: kills `TIMER_ANIM` (`30 ms`) immediately once `(target_pct - anim_pct).abs() <= 0.002` and re-arms only when new progress arrives.
+  - `trim_working_set()` called after initial GUI settle and on worker completion.
+- **Measured Before vs After (`ModernInvertedCursors-Setup-v1.1.0-rc.1-x64.exe`):**
+  - **50× UI cursor-glyph redraws (`43px @ 125% DPI`, 5 glyphs/frame, 5 trials):** Direct 4×4 SDF `299.225 ms` median (`289.52, 294.18, 299.23, 299.56, 300.60 ms`) -> **`1.034 ms` median** (`1.012, 1.017, 1.034, 1.052, 1.066 ms`, **`289.4x` faster** per UI repaint!).
+  - **Live Setup GUI Idle Working Set (`3s`/`8s`):** Pre-Batch-06 `29.51 MB` (`30,945,280 B`) -> Post-Batch-06 **`22.86 MB` (`23,973,888 B`, `-22.5%`)**, `6.97 MB` Private (`7,311,360 B`), `353` Handles, `0.234s` CPU.
+  - **`--smoke-ui` 3-trial run (`4` BMPs rendered + written in Batch 06 vs `3` BMPs Pre-B6):** `209.5 ms` median (`6,331.8, 209.5, 199.1 ms`) vs Pre-B6 `209.9 ms` (`2,353.7, 191.6, 209.9 ms`).

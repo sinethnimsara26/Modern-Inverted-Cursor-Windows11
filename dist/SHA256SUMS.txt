@@ -1,6 +1,6 @@
-a22d96b0cfec46236512d21c11e1dd3fc5472cab9e9f92986e832804e9170b3b  ModernInvertedCursors-Guardian-v1.1.0-rc.1-win7-win10-x64.exe
-a861c51bc6440843b56171b4b49e25f64312bf370ad58b3a745712b2ca000648  ModernInvertedCursors-Guardian-v1.1.0-rc.1-win7-win10-x86.exe
-965d062dd2e68bf84a088d1f5985aa1fabeb1e0aa3a6c7a78b81e222d447ee66  ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe
-deef61055f82d902a746b05e4b5e080980b471874264b1e796ef02391959504b  ModernInvertedCursors-Setup-v1.1.0-rc.1-win7-win10-x64.exe
-6dbc1562fd8e5530cacd24263778990977d1ed6246be1d7dac7ee5ab2940b11e  ModernInvertedCursors-Setup-v1.1.0-rc.1-win7-win10-x86.exe
-b7af0cf25209336bc5662328b8ac090a473e50fac95672d41722c08dd3d9f83c  ModernInvertedCursors-Setup-v1.1.0-rc.1-x64.exe
+9ecbc1697bea8983ecc1e0fc98ca257db95ff69a17fdfef8eb0067b420ca5eab  ModernInvertedCursors-Guardian-v1.1.0-rc.1-win7-win10-x64.exe
+b4d810775ed1da07d521704c10ebb26855b11ad9c389082932706591bf607d6f  ModernInvertedCursors-Guardian-v1.1.0-rc.1-win7-win10-x86.exe
+4697c970c413ccd22dfa2d34d23b880e25a7601f298e50028d87e7bce7f16c47  ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe
+0b57a9baa261f4988cd8052cbcd415f15243c28cb5af37f9d179b76cf3b28b11  ModernInvertedCursors-Setup-v1.1.0-rc.1-win7-win10-x64.exe
+9840d793b516ef460e6fa01982a17932c069146b92a5e47f319814983a400f46  ModernInvertedCursors-Setup-v1.1.0-rc.1-win7-win10-x86.exe
+25a0ff014b8d8a6745a3c336786129546f1557c9fd3877e62c83a20eb59421ed  ModernInvertedCursors-Setup-v1.1.0-rc.1-x64.exe

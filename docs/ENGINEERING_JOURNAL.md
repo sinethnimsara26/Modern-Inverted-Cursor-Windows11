@@ -95,3 +95,16 @@ Confirmed 14 distinct defects across baseline (`BUG-01` through `BUG-14`), inclu
    - Registry sync (`x50` calls): `32.01 ms` -> **`8.59 ms` median** (**3.72x faster**, 0 writes on match).
    - Sandbox tray Guardian (`PID 9040` vs live `v1.0.0` `PID 9072`): **`0.75 MB` WS (-62.9%)**, **`116` Handles (-6)**, `71.0 ms` warm startup median (`233.9, 66.1, 71.0 ms`).
    - Added 2 unit tests (`test_reg_sync_cursor_values_opens_once_and_elides_noop_writes`, `test_asset_verify_cache_skips_rehash_and_detects_tamper`); **`24/24 PASSED`** across `x64`, `win7-win10-x64`, and `win7-win10-x86`.
+
+---
+
+## Batch 06 — Installer & UI Performance Optimization + Keyboard Accessibility
+
+1. **Changes Implemented:**
+   - Added `CursorGlyphSprite` (`src/render.rs`) + `GlyphSpriteCache` (`src/bin/setup/ui.rs`) so 4×4 supersampled cursor glyphs rasterize once per DPI and blit via fast integer fixed-point compositing.
+   - Added `GuiState.dirty` fast path on `WM_PAINT` (pure `BitBlt` on clean OS expose paints), auto-stopped `TIMER_ANIM` when progress settles (`diff.abs() <= 0.002`), and added `trim_working_set()` after initial paint and worker completion.
+   - Added full keyboard navigation (`Tab`, `Shift+Tab`, `Left/Right/Up/Down` arrows, `Space`, `Enter`, `Escape`) with `stroke_round_rect` high-contrast focus outlines (`focus_order`, `activate_control`), plus `--dpi <N>` override for `--smoke-ui`.
+2. **Measured Improvements & Tests:**
+   - 50× UI cursor-glyph redraws (`43px @ 125% DPI`): `299.23 ms` -> **`1.034 ms` median** (**289.4x faster**).
+   - Live Setup GUI Working Set (`8s` idle): `29.51 MB` -> **`22.86 MB`** (**-22.5%**).
+   - Visually verified `01_setup_dark`, `04_setup_focus_dark`, `02_installing_dark`, `03_done_dark` renders; added 2 tests (`test_cursor_glyph_sprite_matches_direct_raster_dimensions`, `test_keyboard_focus_order_tracks_screen_and_install_state`); **`26/26 PASSED`** across `x64`, `win7-win10-x64`, and `win7-win10-x86`.

@@ -73,3 +73,16 @@ Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated
   - `test_reg_sync_cursor_values_opens_once_and_elides_noop_writes`
   - `test_asset_verify_cache_skips_rehash_and_detects_tamper`
 - **Live Sandbox Guardian Smoke Test:** Started `ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe --tray --sandbox <scratch> --compact`, verified tray readiness (`sandbox-runtime.txt`), measured `0.75 MB` WS / `116` Handles, cleanly stopped via `--quit --sandbox`, and confirmed existing user `PID 9072` remained alive and untouched.
+
+---
+
+## Batch 06 Test Evidence (`v1.1.0-rc.1` Setup GUI Performance & Keyboard Accessibility)
+
+- **`x64` (`1.99.0`):** `build.ps1 -Arch x64 -Suffix x64` -> **`26/26 PASSED`** (`19` lib + `1` guardian + `6` setup), `0` warnings.
+  - Setup `696,832 B`, Guardian `307,200 B`.
+- **`win7-win10-x64` (`1.75.0`):** `build.ps1 -Arch win7-win10-x64 -Toolchain 1.75.0 -Target x86_64-pc-windows-msvc -Suffix win7-win10-x64 -StaticCrt` -> **`26/26 PASSED`**.
+- **`win7-win10-x86` (`1.75.0`):** `build.ps1 -Arch win7-win10-x86 -Toolchain 1.75.0 -Target i686-pc-windows-msvc -Suffix win7-win10-x86 -StaticCrt` -> **`26/26 PASSED`** (Setup `817,152 B`, Guardian `372,224 B`).
+- **Batch 06 Regression Tests Added:**
+  - `test_cursor_glyph_sprite_matches_direct_raster_dimensions`
+  - `test_keyboard_focus_order_tracks_screen_and_install_state`
+- **Visual Verification:** Inspected rendered PNGs of `01_setup_dark.bmp`, `04_setup_focus_dark.bmp` (keyboard focus ring on `Tail Detached`), `02_installing_dark.bmp`, and `03_done_dark.bmp`; zero text clipping, clean contrast, crisp sprite blits.

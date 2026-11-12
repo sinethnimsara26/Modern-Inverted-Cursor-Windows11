@@ -37,7 +37,7 @@ pub use registry::{
     PUBLISHER, RUN_SUBKEY, SCHEMES_SUBKEY, SETUP_EXE_NAME, TRAY_WND_CLASS, UNINSTALL_KEY_NAME,
     UNINSTALL_PARENT_SUBKEY, UNINSTALL_SUBKEY,
 };
-pub use render::{create_split_cursor_hicon, draw_cursor_glyph, DestroyCursor};
+pub use render::{create_split_cursor_hicon, draw_cursor_glyph, CursorGlyphSprite, DestroyCursor};
 
 #[cfg(test)]
 mod tests {
@@ -328,5 +328,30 @@ mod tests {
         let err = verify_asset_file(ASSETS[0], &tmp.join(ASSETS[0].name)).unwrap_err();
         assert!(err.contains("Git blob SHA-1 check"));
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_cursor_glyph_sprite_matches_direct_raster_dimensions() {
+        let mut direct = vec![0xFF0D_1117u32; 40 * 40];
+        let mut cached = vec![0xFF0D_1117u32; 40 * 40];
+        draw_cursor_glyph(&mut direct, 40, 2, 2, 34, Preset::Compact, false, false);
+        let sprite = CursorGlyphSprite::rasterize(34, Preset::Compact, false);
+        assert_eq!(sprite.size, 34);
+        assert_eq!(sprite.premul.len(), 34 * 34);
+        sprite.blit_onto(&mut cached, 40, 2, 2);
+
+        // Expect >= 99% of pixels within +/- 1 channel step of direct floating-point blend.
+        let max_channel_diff = direct
+            .iter()
+            .zip(cached.iter())
+            .map(|(&a, &b)| {
+                let dr = ((a >> 16) & 0xFF).abs_diff((b >> 16) & 0xFF);
+                let dg = ((a >> 8) & 0xFF).abs_diff((b >> 8) & 0xFF);
+                let db = (a & 0xFF).abs_diff(b & 0xFF);
+                dr.max(dg).max(db)
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(max_channel_diff <= 2, "max channel diff={max_channel_diff}");
     }
 }

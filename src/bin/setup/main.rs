@@ -25,12 +25,12 @@ use std::{
 use ui::{
     bring_existing_setup_to_front, create_setup_window, new_gui_state, run_smoke_ui, Backbuffer,
     CloseHandle, CreateMutexW, DestroyIcon, DispatchMessageW, FontSet, GetLastError, GetMessageW,
-    MessageBoxW, Msg, Rect, TranslateMessage,
+    GlyphSpriteCache, MessageBoxW, Msg, Rect, TranslateMessage,
 };
 
 pub const TIMER_ANIM: usize = 1;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ControlId {
     PresetCard(usize),
     ToggleStartup,
@@ -85,7 +85,11 @@ pub struct GuiState {
     pub current_px: u32,
     pub hover: Option<ControlId>,
     pub pressed: Option<ControlId>,
+    pub focus: Option<ControlId>,
     pub tracking_mouse: bool,
+    pub dirty: bool,
+    pub anim_active: bool,
+    pub trimmed_initial: bool,
     pub hits: Vec<HitZone>,
     pub anim_pct: f32,
     pub target_pct: f32,
@@ -97,6 +101,7 @@ pub struct GuiState {
     pub worker_target: Arc<WorkerTarget>,
     pub shared_update: Arc<Mutex<WorkerUpdate>>,
     pub fonts: FontSet,
+    pub glyph_cache: GlyphSpriteCache,
     pub backbuffer: Option<Backbuffer>,
     pub app_icon: *mut c_void,
 }
@@ -129,7 +134,8 @@ fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
 
     if let Some(smoke_dir) = arg_value(&args, "--smoke-ui") {
-        return run_smoke_ui(Path::new(&smoke_dir));
+        let dpi_override = arg_value(&args, "--dpi").and_then(|v| v.parse::<u32>().ok());
+        return run_smoke_ui(Path::new(&smoke_dir), dpi_override);
     }
 
     if let Some(sandbox_dir) = arg_value(&args, "--sandbox") {
@@ -320,7 +326,7 @@ mod tests {
     use modern_inverted_cursor::{NamedReadyEvent, CREATE_NO_WINDOW};
     use std::os::windows::process::CommandExt;
     use std::process::Command;
-    use ui::{BitmapInfoHeader, MonitorInfo, PaintStruct, TrackMouseEvent};
+    use ui::{focus_order, BitmapInfoHeader, MonitorInfo, PaintStruct, TrackMouseEvent};
 
     #[test]
     fn test_win32_setup_structs_match_sdk() {
@@ -416,5 +422,27 @@ mod tests {
         sync_setup_maintenance_copy(&dest, &dest).unwrap();
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_keyboard_focus_order_tracks_screen_and_install_state() {
+        let fresh = focus_order(Screen::Setup, false, false, false);
+        assert_eq!(fresh.len(), 7);
+        assert_eq!(fresh[0], ControlId::PresetCard(0));
+        assert_eq!(fresh[6], ControlId::BtnInstall);
+
+        let existing = focus_order(Screen::Setup, true, false, false);
+        assert_eq!(existing.len(), 8);
+        assert_eq!(existing[6], ControlId::BtnRestore);
+        assert_eq!(existing[7], ControlId::BtnInstall);
+
+        let done_ok = focus_order(Screen::Done, true, false, false);
+        assert_eq!(done_ok, vec![ControlId::BtnOpenFolder, ControlId::BtnFinish]);
+
+        let done_err = focus_order(Screen::Done, true, true, false);
+        assert_eq!(done_err, vec![ControlId::BtnOpenFolder, ControlId::BtnFinish]);
+
+        let working = focus_order(Screen::Working, true, false, false);
+        assert!(working.is_empty());
     }
 }
