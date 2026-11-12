@@ -37,7 +37,10 @@ On the target workstation, the V6 silent tray guardian was verified active and h
 
 ## 3. Post-Release GitHub & System Confirmation
 
-- **Public Release Published:** [v1.0.0](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/tag/v1.0.0) (`ModernInvertedSetup-v1.0.0.exe` `604,672` bytes, `ModernInvertedCursorGuardian.exe` `276,480` bytes, `SHA256SUMS.txt`).
-- **GitHub Actions Windows CI:** Both `main` (`#43160811878`, `54s`) and tag `v1.0.0` (`#43160826875`, `50s`) passed cleanly on `windows-latest` (`cargo test` 8/8, release builds, and `--smoke-ui`).
-- **Post-Release Local PC Check:** Verified the installed V6 Tray Guardian (`PID 12984`, `268,288` bytes, `Compact` 36 px) remained running continuously throughout all builds, sandbox tests, and release publishing with `0.078s` total CPU and `backup-original.reg` preserved untouched.
+- **Initial x64 Release:** [v1.0.0](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/tag/v1.0.0) (`ModernInvertedSetup-v1.0.0.exe` `604,672` bytes, `ModernInvertedCursorGuardian.exe` `276,480` bytes, `SHA256SUMS.txt`).
+- **Second Multi-Arch Release (First Release Series `v1.0.x`):** [v1.0.1](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/tag/v1.0.1) adds native **Windows 11 ARM64 (`aarch64-pc-windows-msvc`)** builds (`ModernInvertedSetup-v1.0.1-arm64.exe` `560,640` bytes, `ModernInvertedCursorGuardian-arm64.exe` `257,024` bytes) alongside **Windows x64** (`ModernInvertedSetup-v1.0.1-x64.exe` `604,672` bytes, `ModernInvertedCursorGuardian-x64.exe` `276,480` bytes).
+- **GitHub Actions Windows CI:**
+  - `v1.0.0` (`#43160826875`, `50s`) passed on `windows-latest`.
+  - `v1.0.1` (`#43162511198`) passed across **all 3 jobs**: `Build & Test (x64)` on `windows-latest` (`58s`), `Build & Test (arm64)` on `windows-11-arm` (`55s`, including `SMOKE_UI_OK dpi=96 dwm_dark=true size=620x540` and `0xAA64` PE verification), and `Publish Multi-Arch GitHub Release` (`5s`).
+- **Post-Release Local PC Check:** Verified the installed V6 Tray Guardian (`PID 12984`, `268,288` bytes, `Compact` 36 px) remained running continuously throughout all builds, sandbox tests, and both releases with `0.078s` total CPU and `backup-original.reg` preserved untouched.
 

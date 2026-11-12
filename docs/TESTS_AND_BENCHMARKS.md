@@ -21,13 +21,18 @@ All tests and benchmarks below were executed directly on **Windows 11 (`x86_64-p
 
 ---
 
-## 2. Binary & PE Subsystem Verification
+## 2. Binary & PE Subsystem Verification (x64 & Native ARM64)
 
-| Artifact | File Size | SHA-256 | PE Subsystem |
-| :--- | :--- | :--- | :--- |
-| `dist/ModernInvertedCursorGuardian.exe` | **`276,480` bytes (~270 KB)** | `9fcf563277fda9e44c25ebcfe78ad8fde6ee94f62c64aedb3ae66472b2f3f166` | **`2` (Windows GUI — no console)** |
-| `dist/ModernInvertedSetup-v1.0.0.exe` | **`604,672` bytes (~590 KB)** | `11975328bfffd07e1cbe1e4ad1b9d3b382d78800117ea28a352b8a306806ece5` | **`2` (Windows GUI — no console)** |
-| *Baseline V5.1 (for comparison)* | `5,161,090` bytes (~4.92 MB) | *(legacy-v5.1)* | `3` (Console — opens Windows Terminal) |
+| Artifact | Architecture | File Size | SHA-256 | PE Machine / Subsystem |
+| :--- | :--- | :--- | :--- | :--- |
+| `ModernInvertedCursorGuardian-x64.exe` (`v1.0.1`) | `x86_64-pc-windows-msvc` | **`276,480` bytes (~270 KB)** | `8def6f2e336342b4a2e34f8c3d4cc4ebd0c33b4eab8a7dd2a2187c62d763600d` | `0x8664` / **`2` (Windows GUI)** |
+| `ModernInvertedSetup-v1.0.1-x64.exe` | `x86_64-pc-windows-msvc` | **`604,672` bytes (~590 KB)** | `0da19df371dd078935f9e81f41a1112511b86ed24ac36fb340940eea72f8244c` | `0x8664` / **`2` (Windows GUI)** |
+| `ModernInvertedCursorGuardian-arm64.exe` (`v1.0.1`) | `aarch64-pc-windows-msvc` | **`257,024` bytes (~251 KB)** | `c448d246792017842c347badd1b5f44e8485ceb932777d9f4f93bc6175b1512d` | `0xAA64` / **`2` (Windows GUI)** |
+| `ModernInvertedSetup-v1.0.1-arm64.exe` | `aarch64-pc-windows-msvc` | **`560,640` bytes (~547.5 KB)** | `133315c1aa0aaf9c775fb427ac2a6a7c6c3f9862f0c0c89e9d07b532bee8f0b1` | `0xAA64` / **`2` (Windows GUI)** |
+| `ModernInvertedSetup-v1.0.0.exe` (`v1.0.0` initial) | `x86_64-pc-windows-msvc` | `604,672` bytes (~590 KB) | `11975328bfffd07e1cbe1e4ad1b9d3b382d78800117ea28a352b8a306806ece5` | `0x8664` / `2` (Windows GUI) |
+| *Baseline V5.1 (for comparison)* | `x86_64` | `5,161,090` bytes (~4.92 MB) | *(legacy-v5.1)* | `3` (Console — opens Windows Terminal) |
+
+*(Native ARM64 binaries built, unit-tested, PE-checked, and UI-smoke-verified directly on GitHub Actions `windows-11-arm` runner in run `#43162511198`.)*
 
 ---
 
