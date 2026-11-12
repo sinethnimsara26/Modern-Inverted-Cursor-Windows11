@@ -60,16 +60,16 @@ jobs:
       - name: Build release binaries and run unit tests (${{ matrix.suffix }})
         shell: pwsh
         run: |
-          $argsList = @(
-            "-Arch", "${{ matrix.arch }}",
-            "-Suffix", "${{ matrix.suffix }}",
-            "-Toolchain", "${{ matrix.toolchain }}",
-            "-Target", "${{ matrix.target }}"
-          )
-          if ("${{ matrix.static_crt }}" -eq "true") {
-            $argsList += "-StaticCrt"
+          $params = @{
+            Arch      = "${{ matrix.arch }}"
+            Suffix    = "${{ matrix.suffix }}"
+            Toolchain = "${{ matrix.toolchain }}"
+            Target    = "${{ matrix.target }}"
           }
-          & ./build.ps1 @argsList
+          if ("${{ matrix.static_crt }}" -eq "true") {
+            $params.StaticCrt = $true
+          }
+          & ./build.ps1 @params
 
       - name: Verify PE architecture (${{ matrix.expected_machine }}) & GUI subsystem
         shell: pwsh
