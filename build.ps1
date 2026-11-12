@@ -64,7 +64,10 @@ $GuardianLatestCopy = Join-Path $Dist $GuardianStableLink
 Push-Location $Root
 try {
     Write-Host "[1/4] Building ModernInvertedCursors-Guardian ($Suffix, release)..." -ForegroundColor Cyan
+    $env:MIC_BUILDING_GUARDIAN = "1"
+    Remove-Item Env:GUARDIAN_EMBED_PATH -ErrorAction SilentlyContinue
     & cargo @CargoPrefix build --release @TargetArgs --bin ModernInvertedCursors-Guardian
+    Remove-Item Env:MIC_BUILDING_GUARDIAN -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -ne 0) { throw "Guardian build failed." }
     $BuiltGuardian = Join-Path $TargetRoot "$TargetSubdir\ModernInvertedCursors-Guardian.exe"
     Copy-Item $BuiltGuardian $GuardianOut -Force
