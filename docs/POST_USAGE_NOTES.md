@@ -32,3 +32,12 @@ On the target workstation, the V6 silent tray guardian was verified active and h
    Installing V6 cleanly stops V5.1, eliminates the Windows Terminal popup at login, and stops creating new `installer-*.log` files on every boot (switching to a single 32 KB rolling `guardian.log`). Any historical `installer-*.log` files from earlier V5.1 boots in `%LOCALAPPDATA%\ModernInvertedCursors` can be deleted manually at any time if desired; never delete `backup-original.reg` while using the pack.
 5. **Restoring defaults completely:**  
    Either right-click the tray icon → **Restore Original Cursors...**, select **Modern Inverted Mouse Cursors → Uninstall** inside Windows **Settings → Apps → Installed apps** (when installed via `ModernInvertedSetup-v1.0.0.exe`), or run `--restore`.
+
+---
+
+## 3. Post-Release GitHub & System Confirmation
+
+- **Public Release Published:** [v1.0.0](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/tag/v1.0.0) (`ModernInvertedSetup-v1.0.0.exe` `604,672` bytes, `ModernInvertedCursorGuardian.exe` `276,480` bytes, `SHA256SUMS.txt`).
+- **GitHub Actions Windows CI:** Both `main` (`#43160811878`, `54s`) and tag `v1.0.0` (`#43160826875`, `50s`) passed cleanly on `windows-latest` (`cargo test` 8/8, release builds, and `--smoke-ui`).
+- **Post-Release Local PC Check:** Verified the installed V6 Tray Guardian (`PID 12984`, `268,288` bytes, `Compact` 36 px) remained running continuously throughout all builds, sandbox tests, and release publishing with `0.078s` total CPU and `backup-original.reg` preserved untouched.
+
