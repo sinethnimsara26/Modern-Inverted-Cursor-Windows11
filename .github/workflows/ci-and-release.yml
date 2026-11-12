@@ -93,6 +93,7 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           cat <<'EOF' > release_notes.md
@@ -100,7 +101,7 @@ jobs:
 
           **100% Free and Open Source Software (FOSS • MIT License)** — everyone is welcome to use, tweak, fork, and build their own versions! If you run into any bugs, Windows quirks, or ideas, please open an [Issue](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues) or Pull Request.
 
-          > **Release Note:** This release extends our initial **`v1.0.0`** launch under the **first release series (`v1.0.x`)**, adding native **Windows 11 ARM64 (`aarch64-pc-windows-msvc`)** builds compiled and tested on GitHub's cloud `windows-11-arm` runner alongside **Windows x64 (`x86_64-pc-windows-msvc`)**. Future updates may follow as we discover new bugs or Windows changes.
+          > **Release Note:** This release extends our initial **`v1.0.0`** launch under the **first release series (`v1.0.x`)**, adding native **Windows 11 ARM64 (`aarch64-pc-windows-msvc`)** builds compiled and tested natively on GitHub's cloud `windows-11-arm` runner alongside **Windows x64 (`x86_64-pc-windows-msvc`)**. Future updates may follow as we discover new bugs or Windows changes.
 
           ### Downloads
           - **Intel / AMD Windows 10 & 11 (x64):** `ModernInvertedSetup-v1.0.1-x64.exe`
@@ -109,9 +110,9 @@ jobs:
           - **Checksums:** `SHA256SUMS.txt`
           EOF
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --clobber
-            gh release edit "$TAG" --title "$TAG — Windows x64 & ARM64 Dark-Mode Setup & Silent Tray Guardian" --notes-file release_notes.md
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber --repo "$GH_REPO"
+            gh release edit "$TAG" --repo "$GH_REPO" --title "$TAG — Windows x64 & ARM64 Dark-Mode Setup & Silent Tray Guardian" --notes-file release_notes.md
           else
-            gh release create "$TAG" release-assets/* --title "$TAG — Windows x64 & ARM64 Dark-Mode Setup & Silent Tray Guardian" --notes-file release_notes.md
+            gh release create "$TAG" release-assets/* --repo "$GH_REPO" --title "$TAG — Windows x64 & ARM64 Dark-Mode Setup & Silent Tray Guardian" --notes-file release_notes.md
           fi
