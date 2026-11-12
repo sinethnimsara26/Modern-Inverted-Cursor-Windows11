@@ -1,9 +1,9 @@
 # AI_HANDOFF.md — Engineering Audit & Hardening Checkpoint
 
 **Last Updated:** 2026-11-12  
-**Active Branch:** `hardening/v1.1.0-audit`  
-**Verified Baseline Commit (`main`):** `398f09b0b2c89c633d336edbf097789aad0e8256` (`v1.0.2`)  
-**Target Release Candidate:** `v1.1.0-rc.1` *(do NOT merge into `main` or publish non-RC `v1.1.0` without explicit user approval)*
+**Active Branch:** `main` (promoted from `hardening/v1.1.0-audit`)  
+**Verified Baseline Commit (`v1.0.2`):** `398f09b0b2c89c633d336edbf097789aad0e8256`  
+**Target Stable Release:** `v1.1.0` *(user approved merge to `main` & stable release publication after `v1.1.0-rc.1`)*
 
 ---
 
@@ -32,4 +32,4 @@
   - Startup `HKCU\...\Run\ModernInvertedCursorGuardian` enabled
 
 ## Immediate Next Action
-All 8 engineering audit, hardening, optimization, and testing batches are complete on branch `hardening/v1.1.0-audit` (`v1.1.0-rc.1`). Await user approval before merging Draft PR into `main` or promoting `v1.1.0` to Latest stable release.
+Merged PR #1 (`hardening/v1.1.0-audit` -> `main`) and published stable release `v1.1.0` with user sign-off. Future work branches cleanly off `main`.
