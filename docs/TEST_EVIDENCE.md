@@ -1,0 +1,23 @@
+# Test Evidence & Execution Log
+
+Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated results.
+
+---
+
+## Baseline Checkpoint (`398f09b0b2c89c633d336edbf097789aad0e8256` — `main` / `v1.0.2`)
+
+### 1. Local Static Checks (`2026-11-12`)
+- `cargo fmt --check`: **FAILED** (whitespace/wrapping diffs in `build.rs`, `src/bin/guardian.rs`, `src/bin/setup.rs`).
+- `cargo clippy --all-targets`: **EXITED 0 WITH 21 WARNINGS** (`6` in `src/lib.rs` + `1` test, `2` in `src/bin/guardian.rs`, `13` in `src/bin/setup.rs`).
+- `cargo test`: **9/9 PASSED** (`6` lib + `1` guardian + `2` setup).
+
+### 2. Local Baseline Benchmarks (`ModernInvertedSetup-v1.0.2-x64.exe` `--sandbox`)
+- Cold trials (3 runs): `30,899.2 ms`, `12,656.7 ms`, `1,029.0 ms` (median `12,656.7 ms`)
+- Warm trials (3 runs): `73.6 ms`, `70.7 ms`, `58.8 ms` (median `70.7 ms`)
+- Setup GUI idle (`3s -> 8s`): `29.56 MB` WS (`30,998,528 B`), `7.00 MB` Private (`7,340,032 B`), `351` Handles, `0.234375s` initial CPU.
+- Live Guardian (`PID 9072`, `ModernInvertedCursorGuardian.exe`): `2.01 MB` WS (`2,109,440 B`), `1.36 MB` Private (`1,429,504 B`), `122` Handles.
+
+### 3. Upstream GitHub Actions Evidence on Baseline
+- `v1.0.2` passing run [`#43177846627`](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/actions/runs/43177846627): all 5 jobs passed (`arm64`, `win7-win10-x64`, `win7-win10-x86`, `x64`, `publish-release`).
+- Prior failure [`#43177594470`](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/actions/runs/43177594470): PowerShell positional array splat bug (`@argsList`), fixed in `398f09b`.
+- Prior failure [`#43162190599`](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/actions/runs/43162190599): `gh release create` failed without `--repo` because `publish-release` lacked `.git`, fixed in `a025f6a`.
