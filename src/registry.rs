@@ -840,20 +840,75 @@ pub fn cleanup_legacy_guardian_binary(root: &Path, log: Option<&BoundedLogger>) 
 }
 
 pub fn parse_preset_arg(args: &[String]) -> Result<Option<Preset>, String> {
+    let mut found: Option<Preset> = None;
     for i in 0..args.len() {
         if args[i] == "--preset" {
             let value = args.get(i + 1).ok_or_else(|| {
                 "--preset requires regular|no-tail|tail-detached|compact".to_string()
             })?;
-            return Preset::from_cli(value)
-                .map(Some)
-                .ok_or_else(|| format!("Unknown preset: {value}"));
-        }
-        if let Some(value) = args[i].strip_prefix("--preset=") {
-            return Preset::from_cli(value)
-                .map(Some)
-                .ok_or_else(|| format!("Unknown preset: {value}"));
+            found = Some(
+                Preset::from_cli(value).ok_or_else(|| format!("Unknown preset: {value}"))?,
+            );
+        } else if let Some(value) = args[i].strip_prefix("--preset=") {
+            found = Some(
+                Preset::from_cli(value).ok_or_else(|| format!("Unknown preset: {value}"))?,
+            );
+        } else {
+            let short = match args[i].as_str() {
+                "--compact" => Some(Preset::Compact),
+                "--no-tail" => Some(Preset::NoTail),
+                "--tail-detached" | "--detached" => Some(Preset::TailDetached),
+                "--regular" => Some(Preset::Regular),
+                _ => None,
+            };
+            if let Some(p) = short {
+                found = Some(p);
+            }
         }
     }
-    Ok(None)
+    Ok(found)
+}
+
+/// Validates CLI flags against allowed boolean, required-value, and optional-value schemas so
+/// typos or unknown flags fail fast instead of silently falling through to default behavior.
+pub fn validate_cli_args(
+    args: &[String],
+    bool_flags: &[&str],
+    value_flags: &[&str],
+    optional_value_flags: &[&str],
+) -> Result<(), String> {
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if bool_flags.contains(&arg) {
+            i += 1;
+            continue;
+        }
+        if value_flags.contains(&arg) {
+            if i + 1 >= args.len() || args[i + 1].starts_with("--") {
+                return Err(format!("Flag {arg} requires a value."));
+            }
+            i += 2;
+            continue;
+        }
+        if optional_value_flags.contains(&arg) {
+            if i + 1 < args.len() && !args[i + 1].starts_with("--") {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if let Some((flag, val)) = arg.split_once('=') {
+            if value_flags.contains(&flag) || optional_value_flags.contains(&flag) {
+                if val.is_empty() {
+                    return Err(format!("Flag {flag}= requires a non-empty value."));
+                }
+                i += 1;
+                continue;
+            }
+        }
+        return Err(format!("Unrecognized CLI argument: {arg}"));
+    }
+    Ok(())
 }

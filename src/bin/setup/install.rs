@@ -14,9 +14,9 @@ use std::{
     env,
     ffi::c_void,
     fs,
-    os::windows::io::AsRawHandle,
+    os::windows::{io::AsRawHandle, process::CommandExt},
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
 };
 
@@ -81,8 +81,15 @@ pub fn launch_and_verify_guardian(
     preset: Preset,
     timeout_ms: u32,
 ) -> Result<(), String> {
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
     let ev = NamedReadyEvent::create_unique("setup")?;
     let child = Command::new(guardian_exe)
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .args([
             "--tray",
             "--preset",

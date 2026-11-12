@@ -30,8 +30,8 @@ pub use registry::{
     hkcu, is_startup_enabled, load_saved_preset, load_system_dll, parse_preset_arg,
     reg_delete_subkey, reg_delete_value, reg_get_dword, reg_get_string, reg_open_notify,
     reg_set_dword, reg_set_string, reg_sync_cursor_values, register_uninstall_entry, save_preset,
-    set_startup_enabled, trim_working_set, unregister_uninstall_entry, wide_z, BoundedLogger,
-    InstallDetection, Preset, RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_SUBKEY,
+    set_startup_enabled, trim_working_set, unregister_uninstall_entry, validate_cli_args, wide_z,
+    BoundedLogger, InstallDetection, Preset, RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_SUBKEY,
     APP_VERSION, CONFIG_SUBKEY, CREATE_NO_WINDOW, CURSORS_SUBKEY, GUARDIAN_EXE_NAME,
     GUARDIAN_RUN_VALUE, LEGACY_GUARDIAN_EXE_NAME, LEGACY_GUARDIAN_RUN_VALUE, PACK_VERSION,
     PUBLISHER, RUN_SUBKEY, SCHEMES_SUBKEY, SETUP_EXE_NAME, TRAY_WND_CLASS, UNINSTALL_KEY_NAME,
@@ -353,5 +353,42 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(max_channel_diff <= 2, "max channel diff={max_channel_diff}");
+    }
+
+    #[test]
+    fn test_validate_cli_args_rejects_unknown_flags_and_missing_values() {
+        let bools = ["--silent", "--modify", "--compact"];
+        let req_vals = ["--preset", "--dpi"];
+        let opt_vals = ["--sandbox"];
+
+        assert!(validate_cli_args(
+            &["--silent".into(), "--preset".into(), "compact".into()],
+            &bools,
+            &req_vals,
+            &opt_vals
+        )
+        .is_ok());
+        assert!(validate_cli_args(
+            &["--sandbox".into(), "--compact".into()],
+            &bools,
+            &req_vals,
+            &opt_vals
+        )
+        .is_ok());
+        assert!(validate_cli_args(
+            &["--silent".into(), "--invalid-preset-xyz".into()],
+            &bools,
+            &req_vals,
+            &opt_vals
+        )
+        .is_err());
+        assert!(validate_cli_args(&["--preset".into()], &bools, &req_vals, &opt_vals).is_err());
+        assert!(validate_cli_args(
+            &["--dpi=".into()],
+            &bools,
+            &req_vals,
+            &opt_vals
+        )
+        .is_err());
     }
 }

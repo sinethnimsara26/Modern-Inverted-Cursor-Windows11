@@ -108,3 +108,15 @@ Confirmed 14 distinct defects across baseline (`BUG-01` through `BUG-14`), inclu
    - 50× UI cursor-glyph redraws (`43px @ 125% DPI`): `299.23 ms` -> **`1.034 ms` median** (**289.4x faster**).
    - Live Setup GUI Working Set (`8s` idle): `29.51 MB` -> **`22.86 MB`** (**-22.5%**).
    - Visually verified `01_setup_dark`, `04_setup_focus_dark`, `02_installing_dark`, `03_done_dark` renders; added 2 tests (`test_cursor_glyph_sprite_matches_direct_raster_dimensions`, `test_keyboard_focus_order_tracks_screen_and_install_state`); **`26/26 PASSED`** across `x64`, `win7-win10-x64`, and `win7-win10-x86`.
+
+---
+
+## Batch 07 — Comprehensive Integration, Multi-DPI, Interactive GUI & Endurance Verification
+
+1. **Defects Caught & Repaired During Testing (`BUG-15`):**
+   - Added `validate_cli_args()` in `src/registry.rs` (`validate_setup_args` & `validate_guardian_args`) and shorthand flag support in `parse_preset_arg()` so typos/unknown flags return non-zero exit codes cleanly instead of falling through to defaults.
+   - Added `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` + null stdio to `launch_and_verify_guardian()` in `src/bin/setup/install.rs` so Guardian does not inherit caller stdio handles.
+2. **Test Suite & Live Checks Executed:**
+   - Added `tests/integration_hardening.rs` (3 integration tests: simulated `v1.0.2` upgrade migration preserving `backup-original.reg`, corrupt/truncated/out-of-scope `.reg` restore rejection preserving Guardian files & backup, UTF-16LE backup roundtrip + 32-asset/17-role completeness).
+   - **`30/30 PASSED`** across `x64` (`1.99.0`), `win7-win10-x64` (`1.75.0`), and `win7-win10-x86` (`1.75.0`).
+   - Verified Multi-DPI (`96`, `120`, `144`, `192 DPI`), real `775x675` DPI-aware `PrintWindow` live Setup HWND keyboard interaction (`Tab -> Right -> Down -> Esc`), Setup single-instance mutex (`exit=0`), `--silent` failure exit (`exit=1` + `setup-error.log`), and sandbox Guardian endurance (`0.46 MB` WS, `116` Handles stable).

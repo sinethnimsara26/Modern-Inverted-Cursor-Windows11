@@ -7,8 +7,9 @@ use install::{execute_install_pipeline, execute_uninstall_pipeline, GUARDIAN_EXE
 use modern_inverted_cursor::{
     app_paths, app_paths_for_root, detect_existing_installation, load_saved_preset,
     parse_preset_arg, perform_validated_restore, reg_delete_value, reset_windows_default_cursors,
-    stop_targeted_guardians, unregister_uninstall_entry, wide_z, BoundedLogger, Preset,
-    CONFIG_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, LEGACY_GUARDIAN_RUN_VALUE, RUN_SUBKEY,
+    stop_targeted_guardians, unregister_uninstall_entry, validate_cli_args, wide_z, BoundedLogger,
+    Preset, CONFIG_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, LEGACY_GUARDIAN_RUN_VALUE,
+    RUN_SUBKEY,
 };
 use std::{
     env,
@@ -130,8 +131,30 @@ fn is_headless_invocation(args: &[String]) -> bool {
     })
 }
 
+fn validate_setup_args(args: &[String]) -> Result<(), String> {
+    validate_cli_args(
+        args,
+        &[
+            "--silent",
+            "--modify",
+            "--no-startup",
+            "--uninstall",
+            "--restore",
+            "--restore-system-defaults",
+            "--compact",
+            "--no-tail",
+            "--tail-detached",
+            "--detached",
+            "--regular",
+        ],
+        &["--sandbox", "--smoke-ui", "--dpi", "--preset"],
+        &[],
+    )
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
+    validate_setup_args(&args)?;
 
     if let Some(smoke_dir) = arg_value(&args, "--smoke-ui") {
         let dpi_override = arg_value(&args, "--dpi").and_then(|v| v.parse::<u32>().ok());

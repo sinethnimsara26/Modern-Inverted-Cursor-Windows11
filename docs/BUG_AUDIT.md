@@ -17,9 +17,10 @@ Every bug listed below was directly verified by inspecting the baseline source c
 | **BUG-09** | **Medium** | `cmd.exe /C` Path Interpolation | `src/ipc.rs` | `schedule_self_delete()` passes unescaped `path.display()` inside `cmd.exe /C "... & del ..."` | **FIXED (Batch 04)** |
 | **BUG-10** | **Medium** | GDI HBITMAP / Dangling Worker HWND / Setup Mutex | `src/bin/setup/ui.rs`, `src/bin/setup/main.rs` | `Backbuffer::destroy()` calls `DeleteObject(hbm)` while selected in `hdc`; worker posts to unchecked `hwnd`; no Setup single-instance guard; `state_ptr` leaks on early `CreateWindowExW` err | **FIXED (Batch 04)** |
 | **BUG-11** | **Medium** | Setup/Guardian Architecture Coupling | `src/bin/setup/`, `src/bin/guardian.rs`, `src/registry.rs` | Guardian owns `--uninstall` and `UninstallString`; Setup not installed as maintenance app; `NoModify=1` | **FIXED (Batch 03)** |
-| **BUG-12** | **Medium** | UI Idle Animation Timer & Full-Frame Redraws | `src/bin/setup.rs:822`, `2182-2190` | `TIMER_ANIM` never stops when `diff <= 0.002`; hover/expose repaints entire 4×4 SDF surface & 4 cursor previews | Batch 06 |
-| **BUG-13** | **Medium** | Incomplete Functional & UI Tests | `tests`, `ci-and-release.yml` | No backup/restore failure tests, no IPC crash/timeout tests, no `--silent` failure exit test, no UI Interaction / multi-DPI (`100–200%`) check | Batch 07 |
+| **BUG-12** | **Medium** | UI Idle Animation Timer & Full-Frame Redraws | `src/bin/setup/ui.rs` | `TIMER_ANIM` never stops when `diff <= 0.002`; hover/expose repaints entire 4×4 SDF surface & 4 cursor previews | **FIXED (Batch 06)** |
+| **BUG-13** | **Medium** | Incomplete Functional & UI Tests | `tests/`, `ci-and-release.yml` | No backup/restore failure tests, no IPC crash/timeout tests, no `--silent` failure exit test, no UI interaction / multi-DPI (`100–200%`) check | **FIXED (Batch 07)** |
 | **BUG-14** | **Low-Medium** | Doc Drift & Lint Hygiene | `docs/TESTS_AND_BENCHMARKS.md`, `README.md`, `cargo fmt/clippy` | Claims `8/8` tests when `9` exist; `cargo fmt --check` fails; 21 Clippy warnings; outdated `v1.0.0` CLI examples | Batch 01–08 |
+| **BUG-15** | **Medium** | Silent CLI Flag Fall-Through & Inherited Child Handles | `src/registry.rs`, `src/bin/setup/install.rs` | Discovered in Batch 07: unknown flags fell through to default preset in `--silent`; spawned Guardian inherited caller handles without `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` | **FIXED (Batch 07)** |
 
 ---
 

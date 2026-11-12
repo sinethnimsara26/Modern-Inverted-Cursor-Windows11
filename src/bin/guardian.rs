@@ -2,12 +2,12 @@
 
 use modern_inverted_cursor::{
     app_paths, app_paths_for_root, balanced_cursor_size, create_split_cursor_hicon,
-    current_accessibility_step, is_startup_enabled, load_saved_preset,
-    parse_preset_arg, perform_validated_restore, reg_delete_value, reg_get_string, reg_open_notify,
-    reg_set_dword, reg_set_string, save_preset, set_startup_enabled, stop_targeted_guardians,
-    trim_working_set, wide_z, AssetVerifyCache, BoundedLogger, NamedReadyEvent, Preset, RegCloseKey,
-    RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION, CONFIG_SUBKEY,
-    CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
+    current_accessibility_step, is_startup_enabled, load_saved_preset, parse_preset_arg,
+    perform_validated_restore, reg_delete_value, reg_get_string, reg_open_notify, reg_set_dword,
+    reg_set_string, save_preset, set_startup_enabled, stop_targeted_guardians, trim_working_set,
+    validate_cli_args, wide_z, AssetVerifyCache, BoundedLogger, NamedReadyEvent, Preset,
+    RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION,
+    CONFIG_SUBKEY, CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
     SETUP_EXE_NAME, TRAY_WND_CLASS,
 };
 
@@ -845,8 +845,27 @@ fn sandbox_arg(args: &[String]) -> Option<PathBuf> {
     None
 }
 
+fn validate_guardian_args(args: &[String]) -> Result<(), String> {
+    validate_cli_args(
+        args,
+        &[
+            "--tray",
+            "--replace",
+            "--quit",
+            "--compact",
+            "--no-tail",
+            "--tail-detached",
+            "--detached",
+            "--regular",
+        ],
+        &["--ready-event", "--preset"],
+        &["--sandbox"],
+    )
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
+    validate_guardian_args(&args)?;
     let sandbox_dir = sandbox_arg(&args);
     let sandbox_mode = sandbox_dir.is_some();
     let (root, install_dir, backup_path) = match sandbox_dir {

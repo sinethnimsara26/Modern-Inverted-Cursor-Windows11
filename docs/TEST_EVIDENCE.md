@@ -86,3 +86,18 @@ Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated
   - `test_cursor_glyph_sprite_matches_direct_raster_dimensions`
   - `test_keyboard_focus_order_tracks_screen_and_install_state`
 - **Visual Verification:** Inspected rendered PNGs of `01_setup_dark.bmp`, `04_setup_focus_dark.bmp` (keyboard focus ring on `Tail Detached`), `02_installing_dark.bmp`, and `03_done_dark.bmp`; zero text clipping, clean contrast, crisp sprite blits.
+
+---
+
+## Batch 07 Test Evidence (`v1.1.0-rc.1` Integration, Multi-DPI, Interactive GUI & Endurance Suite)
+
+- **`x64` (`1.99.0`), `win7-win10-x64` (`1.75.0`), `win7-win10-x86` (`1.75.0`):** **`30/30 PASSED`** on all three local targets (`20` lib + `1` guardian + `6` setup + `3` integration tests in `tests/integration_hardening.rs`).
+- **Negative CLI & Error Propagation Verification (`BUG-15` fixed):**
+  - `--silent --invalid-preset-xyz` -> exited `1`, logged `[setup-error] Unrecognized CLI argument: --invalid-preset-xyz` to `setup-error.log`, zero blocking `MessageBoxW`.
+  - `--silent --preset does_not_exist` -> exited `1`, logged `[setup-error] Unknown preset: does_not_exist` to `setup-error.log`.
+- **Multi-DPI Screenshot Suite (`100%`–`200%` visually verified):**
+  - `96 DPI (100%)` -> `620x540`, `120 DPI (125%)` -> `775x675`, `144 DPI (150%)` -> `930x810`, `192 DPI (200%)` -> `1240x1080` (`dwm_dark=true`, crisp sprites & zero text clipping inspected).
+- **Live Interactive Setup HWND & Single-Instance Automation:**
+  - Launched `ModernInvertedCursors-Setup-v1.1.0-rc.1-x64.exe --modify`, verified second Setup instance focused existing HWND and exited `0`, drove live `WM_KEYDOWN` (`Tab -> Right -> Down -> Esc`), and captured full `775x675` Per-Monitor DPI v2 `PrintWindow` frame showing active selection + keyboard focus ring on `Regular`, followed by clean `Esc` exit (`code=0`).
+- **Isolated Sandbox Guardian Endurance Check:**
+  - `ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe --tray --sandbox` processed 20 rapid `WM_APP_REAPPLY` / `WM_DISPLAYCHANGE` notifications with identical process footprint before and after (`WS=487,424 B / 0.46 MB`, `PM=1,568,768 B / 1.50 MB`, `Handles=116`) and exited cleanly via `--quit --sandbox`.
