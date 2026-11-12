@@ -101,3 +101,15 @@ Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated
   - Launched `ModernInvertedCursors-Setup-v1.1.0-rc.1-x64.exe --modify`, verified second Setup instance focused existing HWND and exited `0`, drove live `WM_KEYDOWN` (`Tab -> Right -> Down -> Esc`), and captured full `775x675` Per-Monitor DPI v2 `PrintWindow` frame showing active selection + keyboard focus ring on `Regular`, followed by clean `Esc` exit (`code=0`).
 - **Isolated Sandbox Guardian Endurance Check:**
   - `ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe --tray --sandbox` processed 20 rapid `WM_APP_REAPPLY` / `WM_DISPLAYCHANGE` notifications with identical process footprint before and after (`WS=487,424 B / 0.46 MB`, `PM=1,568,768 B / 1.50 MB`, `Handles=116`) and exited cleanly via `--quit --sandbox`.
+
+---
+
+## Batch 08 Final Regression & Hygiene Verification (`v1.1.0-rc.1`)
+
+- `cargo fmt --check`: **`PASSED`** (`0` diffs across workspace).
+- `cargo clippy --all-targets -- -D warnings` (with `rust-version = "1.75.0"` in `Cargo.toml`): **`PASSED`** (`0` warnings, `0` errors).
+- Final `build.ps1` across all 3 local targets:
+  - `x64` (`1.99.0`): **`30/30 PASSED`** (`Setup 699,392 B`, `Guardian 308,224 B`)
+  - `win7-win10-x64` (`1.75.0 +crt-static`): **`30/30 PASSED`** (`Setup 924,672 B`, `Guardian 420,864 B`)
+  - `win7-win10-x86` (`1.75.0 +crt-static`): **`30/30 PASSED`** (`Setup 820,736 B`, `Guardian 374,272 B`)
+- `dumpbin /IMPORTS` audit on final legacy `win7-win10-x64` & `win7-win10-x86`: ONLY `ADVAPI32.dll`, `bcrypt.dll`, `GDI32.dll`, `KERNEL32.dll`, `ntdll.dll`, `SHELL32.dll`, `USER32.dll`.

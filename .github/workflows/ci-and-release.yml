@@ -56,6 +56,14 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           targets: ${{ matrix.target }}
+          components: ${{ matrix.suffix == 'x64' && 'rustfmt, clippy' || '' }}
+
+      - name: Format & Clippy lint gate (x64)
+        if: matrix.suffix == 'x64'
+        shell: pwsh
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
 
       - name: Build release binaries and run unit tests (${{ matrix.suffix }})
         shell: pwsh
@@ -103,16 +111,20 @@ jobs:
             if ($bad) { throw "Forbidden Win8+/CRT DLL import in legacy binary: $($bad -join ', ')" }
           }
 
-      - name: Verify Dark-Mode Setup UI smoke rendering (${{ matrix.suffix }})
+      - name: Verify Dark-Mode Setup UI smoke rendering & CLI negative paths (${{ matrix.suffix }})
         shell: pwsh
         run: |
           $setupExe = Get-ChildItem dist -Filter "ModernInvertedCursors-Setup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1 -ExpandProperty FullName
           $smoke = "$env:RUNNER_TEMP\smoke_ui_${{ matrix.suffix }}"
-          Start-Process -FilePath $setupExe -ArgumentList "--smoke-ui", $smoke -Wait
+          Start-Process -FilePath $setupExe -ArgumentList "--smoke-ui", $smoke, "--dpi", "144" -Wait
           if (!(Test-Path "$smoke\01_setup_dark.bmp")) { throw "Missing setup UI smoke screenshot" }
           if (!(Test-Path "$smoke\02_installing_dark.bmp")) { throw "Missing progress UI smoke screenshot" }
           if (!(Test-Path "$smoke\03_done_dark.bmp")) { throw "Missing done UI smoke screenshot" }
+          if (!(Test-Path "$smoke\04_setup_focus_dark.bmp")) { throw "Missing focus UI smoke screenshot" }
           Get-Content "$smoke\smoke-ui-report.txt"
+          $pNeg = Start-Process -FilePath $setupExe -ArgumentList "--silent", "--unknown-flag-test" -PassThru -Wait
+          if ($pNeg.ExitCode -eq 0) { throw "Expected non-zero exit for unknown --silent flag" }
+          Write-Host "Verified --silent invalid flag exit=$($pNeg.ExitCode)"
 
       - name: Verify Legacy WinHTTP sandbox cursor install (${{ matrix.suffix }})
         if: matrix.static_crt == true

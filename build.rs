@@ -16,7 +16,8 @@ fn main() {
             manifest_dir.join("dist/ModernInvertedCursors-Guardian-x64.exe")
         }
     } else if target_arch == "x86" {
-        let legacy_x86 = manifest_dir.join("dist/ModernInvertedCursors-Guardian-win7-win10-x86.exe");
+        let legacy_x86 =
+            manifest_dir.join("dist/ModernInvertedCursors-Guardian-win7-win10-x86.exe");
         if legacy_x86.is_file() {
             legacy_x86
         } else {
@@ -45,11 +46,13 @@ fn main() {
     if candidate.is_file() {
         let bytes = fs::read(&candidate).expect("failed to read guardian binary");
         let pe_ok = bytes.len() > 10_000 && bytes.starts_with(b"MZ") && {
-            let off = u32::from_le_bytes([bytes[0x3C], bytes[0x3D], bytes[0x3E], bytes[0x3F]]) as usize;
+            let off =
+                u32::from_le_bytes([bytes[0x3C], bytes[0x3D], bytes[0x3E], bytes[0x3F]]) as usize;
             bytes.get(off..off + 4) == Some(b"PE\0\0")
-                && expected_machine.map_or(true, |exp| {
-                    bytes.get(off + 4..off + 6) == Some(&exp.to_le_bytes())
-                })
+                && match expected_machine {
+                    None => true,
+                    Some(exp) => bytes.get(off + 4..off + 6) == Some(&exp.to_le_bytes()),
+                }
         };
         if !pe_ok {
             panic!(
@@ -99,6 +102,9 @@ fn main() {
         let manifest_path = out_dir.join("app.manifest");
         fs::write(&manifest_path, manifest).expect("failed to write app.manifest");
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
-        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest_path.display());
+        println!(
+            "cargo:rustc-link-arg=/MANIFESTINPUT:{}",
+            manifest_path.display()
+        );
     }
 }

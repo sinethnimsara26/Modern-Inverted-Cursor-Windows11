@@ -402,9 +402,9 @@ impl AppState {
     }
 
     fn apply_now(&mut self, force_full_hash: bool) -> Result<(), String> {
-        if let Err(err) = self
-            .asset_cache
-            .ensure_all_assets_cached(&self.install_dir, force_full_hash, &self.log)
+        if let Err(err) =
+            self.asset_cache
+                .ensure_all_assets_cached(&self.install_dir, force_full_hash, &self.log)
         {
             self.log.line(format!("[error] Asset check failed: {err}"));
             return Err(err);
@@ -432,7 +432,11 @@ impl AppState {
             trim_working_set();
             return Ok(());
         }
-        match modern_inverted_cursor::register_and_apply(self.preset, &self.install_dir, Some(&self.log)) {
+        match modern_inverted_cursor::register_and_apply(
+            self.preset,
+            &self.install_dir,
+            Some(&self.log),
+        ) {
             Ok((step, px)) => {
                 self.last_step = step;
                 self.last_px = px;
@@ -519,7 +523,12 @@ fn run_popup_menu(
         "Start at Windows Sign-in",
     );
     append_menu_str(hmenu, MF_SEPARATOR, 0, "");
-    append_menu_str(hmenu, MF_STRING, CMD_OPEN_SETUP, "Open Setup & Maintenance...");
+    append_menu_str(
+        hmenu,
+        MF_STRING,
+        CMD_OPEN_SETUP,
+        "Open Setup & Maintenance...",
+    );
     append_menu_str(hmenu, MF_STRING, CMD_OPEN_FOLDER, "Open Install Folder");
     append_menu_str(hmenu, MF_STRING, CMD_VIEW_LOG, "View Guardian Log");
     append_menu_str(hmenu, MF_STRING, CMD_RESTORE, "Restore Original Cursors...");
@@ -561,7 +570,10 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
         };
         if setup_exe.is_file() {
             if let Err(err) = Command::new(&setup_exe).arg("--uninstall").spawn() {
-                show_error_box(hwnd, &format!("Could not launch {}: {err}", setup_exe.display()));
+                show_error_box(
+                    hwnd,
+                    &format!("Could not launch {}: {err}", setup_exe.display()),
+                );
             }
             return;
         }
@@ -658,7 +670,10 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
             let setup_exe = state.root.join(SETUP_EXE_NAME);
             if setup_exe.is_file() {
                 if let Err(err) = Command::new(&setup_exe).arg("--modify").spawn() {
-                    show_error_box(hwnd, &format!("Could not launch {}: {err}", setup_exe.display()));
+                    show_error_box(
+                        hwnd,
+                        &format!("Could not launch {}: {err}", setup_exe.display()),
+                    );
                 }
             } else {
                 open_shell_path(hwnd, &state.root);
@@ -789,7 +804,8 @@ unsafe extern "system" fn wnd_proc(
             }
             WM_SETTINGCHANGE | WM_THEMECHANGED => {
                 if !(*ptr).paused {
-                    let arrow_now = reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
+                    let arrow_now =
+                        reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
                     if !arrow_now.contains("ModernInvertedCursors")
                         || current_accessibility_step() != (*ptr).last_step
                     {
@@ -873,8 +889,16 @@ fn run() -> Result<(), String> {
         None => app_paths()?,
     };
     let log = BoundedLogger::new(root.join("guardian.log"), false);
-    let mutex_name = if sandbox_mode { SANDBOX_MUTEX_NAME } else { MUTEX_NAME };
-    let wnd_class = if sandbox_mode { SANDBOX_WND_CLASS } else { TRAY_WND_CLASS };
+    let mutex_name = if sandbox_mode {
+        SANDBOX_MUTEX_NAME
+    } else {
+        MUTEX_NAME
+    };
+    let wnd_class = if sandbox_mode {
+        SANDBOX_WND_CLASS
+    } else {
+        TRAY_WND_CLASS
+    };
 
     if args.iter().any(|a| a == "--quit") {
         if sandbox_mode {
@@ -1051,11 +1075,7 @@ fn run() -> Result<(), String> {
         }
         if !sandbox_mode {
             let _ = reg_set_string(CONFIG_SUBKEY, Some("RuntimeVersion"), false, APP_VERSION);
-            let _ = reg_set_dword(
-                CONFIG_SUBKEY,
-                "RuntimePid",
-                std::process::id(),
-            );
+            let _ = reg_set_dword(CONFIG_SUBKEY, "RuntimePid", std::process::id());
         }
         if let Some(ev_name) = ready_event.as_deref() {
             NamedReadyEvent::signal_by_name(ev_name)?;

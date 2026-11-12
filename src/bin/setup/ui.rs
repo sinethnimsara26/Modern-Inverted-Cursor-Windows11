@@ -922,12 +922,7 @@ pub fn render_ui(state: &mut GuiState) {
             0x2D374B,
             1.2,
         );
-        sprites[preset_glyph_index(Preset::Regular)].blit_onto(
-            buf,
-            cw,
-            s(29, dpi),
-            s(25, dpi),
-        );
+        sprites[preset_glyph_index(Preset::Regular)].blit_onto(buf, cw, s(29, dpi), s(25, dpi));
 
         fill_round_rect(
             buf,
@@ -2115,17 +2110,7 @@ unsafe extern "system" fn wnd_proc(
                 state.dirty = false;
             }
             if let Some(bb) = state.backbuffer.as_ref() {
-                BitBlt(
-                    hdc,
-                    0,
-                    0,
-                    bb.w as i32,
-                    bb.h as i32,
-                    bb.hdc,
-                    0,
-                    0,
-                    SRCCOPY,
-                );
+                BitBlt(hdc, 0, 0, bb.w as i32, bb.h as i32, bb.hdc, 0, 0, SRCCOPY);
             }
             EndPaint(hwnd, &ps);
             if !state.trimmed_initial {
@@ -2298,7 +2283,9 @@ unsafe extern "system" fn wnd_proc(
                 }
                 return 0;
             }
-            if matches!(w_param, VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN) && state.screen == Screen::Setup {
+            if matches!(w_param, VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN)
+                && state.screen == Screen::Setup
+            {
                 let cur_idx = match state.focus {
                     Some(ControlId::PresetCard(i)) => i,
                     Some(ControlId::BtnRestore) if matches!(w_param, VK_LEFT | VK_RIGHT) => {
@@ -2307,13 +2294,18 @@ unsafe extern "system" fn wnd_proc(
                         InvalidateRect(hwnd, null(), 0);
                         return 0;
                     }
-                    Some(ControlId::BtnInstall) if state.has_existing_install && matches!(w_param, VK_LEFT | VK_RIGHT) => {
+                    Some(ControlId::BtnInstall)
+                        if state.has_existing_install && matches!(w_param, VK_LEFT | VK_RIGHT) =>
+                    {
                         state.focus = Some(ControlId::BtnRestore);
                         state.dirty = true;
                         InvalidateRect(hwnd, null(), 0);
                         return 0;
                     }
-                    _ => Preset::ALL.iter().position(|&p| p == state.preset).unwrap_or(0),
+                    _ => Preset::ALL
+                        .iter()
+                        .position(|&p| p == state.preset)
+                        .unwrap_or(0),
                 };
                 let next_idx = if w_param == VK_LEFT || w_param == VK_RIGHT {
                     cur_idx ^ 1
@@ -2455,7 +2447,9 @@ pub fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut 
         let dpi = window_dpi(hwnd);
         let st = &mut *state_ptr;
         st.hwnd = hwnd;
-        st.worker_target.hwnd.store(hwnd as usize, Ordering::Release);
+        st.worker_target
+            .hwnd
+            .store(hwnd as usize, Ordering::Release);
         st.worker_target.alive.store(true, Ordering::Release);
         st.dpi = dpi;
         st.fonts = FontSet::create(dpi);

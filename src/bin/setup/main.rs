@@ -232,7 +232,14 @@ fn run() -> Result<(), String> {
         }
         let (root, install_dir, backup_path) = app_paths()?;
         let log = BoundedLogger::new(root.join("guardian.log"), false);
-        return execute_uninstall_pipeline(&root, &install_dir, &backup_path, true, &log, |_, _, _| {});
+        return execute_uninstall_pipeline(
+            &root,
+            &install_dir,
+            &backup_path,
+            true,
+            &log,
+            |_, _, _| {},
+        );
     }
 
     if args.iter().any(|a| a == "--restore-system-defaults") {
@@ -412,8 +419,7 @@ mod tests {
             .args(["/C", "ping -n 4 127.0.0.1 >nul"])
             .spawn()
             .unwrap();
-        let err_timeout =
-            verify_child_readiness(child_hang, &ev_hang, 120, &tmp_log).unwrap_err();
+        let err_timeout = verify_child_readiness(child_hang, &ev_hang, 120, &tmp_log).unwrap_err();
         assert!(err_timeout.contains("did not confirm readiness"));
         let _ = fs::remove_file(&tmp_log);
     }
@@ -460,10 +466,16 @@ mod tests {
         assert_eq!(existing[7], ControlId::BtnInstall);
 
         let done_ok = focus_order(Screen::Done, true, false, false);
-        assert_eq!(done_ok, vec![ControlId::BtnOpenFolder, ControlId::BtnFinish]);
+        assert_eq!(
+            done_ok,
+            vec![ControlId::BtnOpenFolder, ControlId::BtnFinish]
+        );
 
         let done_err = focus_order(Screen::Done, true, true, false);
-        assert_eq!(done_err, vec![ControlId::BtnOpenFolder, ControlId::BtnFinish]);
+        assert_eq!(
+            done_err,
+            vec![ControlId::BtnOpenFolder, ControlId::BtnFinish]
+        );
 
         let working = focus_order(Screen::Working, true, false, false);
         assert!(working.is_empty());

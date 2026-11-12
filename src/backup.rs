@@ -1,11 +1,8 @@
 use crate::cursors::reload_cursors;
-use crate::registry::{reg_get_string, reg_set_dword, reg_set_string, BoundedLogger, CREATE_NO_WINDOW, CURSORS_SUBKEY};
-use std::{
-    fs,
-    os::windows::process::CommandExt,
-    path::Path,
-    process::Command,
+use crate::registry::{
+    reg_get_string, reg_set_dword, reg_set_string, BoundedLogger, CREATE_NO_WINDOW, CURSORS_SUBKEY,
 };
+use std::{fs, os::windows::process::CommandExt, path::Path, process::Command};
 
 const MAX_BACKUP_BYTES: usize = 512 * 1024;
 
@@ -80,7 +77,10 @@ pub fn validate_cursor_backup_bytes(bytes: &[u8]) -> Result<(), String> {
 
 pub fn validate_backup_file(path: &Path) -> Result<(), String> {
     if !path.is_file() {
-        return Err(format!("No original cursor backup exists at:\n{}", path.display()));
+        return Err(format!(
+            "No original cursor backup exists at:\n{}",
+            path.display()
+        ));
     }
     let meta = fs::metadata(path)
         .map_err(|e| format!("Could not inspect backup {}: {e}", path.display()))?;
@@ -91,8 +91,8 @@ pub fn validate_backup_file(path: &Path) -> Result<(), String> {
             meta.len()
         ));
     }
-    let bytes = fs::read(path)
-        .map_err(|e| format!("Could not read backup {}: {e}", path.display()))?;
+    let bytes =
+        fs::read(path).map_err(|e| format!("Could not read backup {}: {e}", path.display()))?;
     validate_cursor_backup_bytes(&bytes)
         .map_err(|reason| format!("Cursor backup {} is invalid: {reason}", path.display()))
 }
@@ -102,14 +102,20 @@ pub fn export_backup(backup: &Path, log: Option<&BoundedLogger>) -> Result<(), S
         match validate_backup_file(backup) {
             Ok(()) => {
                 if let Some(l) = log {
-                    l.line(format!("[backup] Keeping existing valid {}", backup.display()));
+                    l.line(format!(
+                        "[backup] Keeping existing valid {}",
+                        backup.display()
+                    ));
                 }
                 return Ok(());
             }
             Err(reason) => {
                 let current_arrow =
                     reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
-                if current_arrow.to_ascii_lowercase().contains("moderninvertedcursors") {
+                if current_arrow
+                    .to_ascii_lowercase()
+                    .contains("moderninvertedcursors")
+                {
                     return Err(format!(
                         "Existing backup is invalid ({reason}) and current cursors already point to Modern Inverted Cursors; refusing to overwrite backup with inverted paths."
                     ));

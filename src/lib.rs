@@ -31,11 +31,11 @@ pub use registry::{
     reg_delete_subkey, reg_delete_value, reg_get_dword, reg_get_string, reg_open_notify,
     reg_set_dword, reg_set_string, reg_sync_cursor_values, register_uninstall_entry, save_preset,
     set_startup_enabled, trim_working_set, unregister_uninstall_entry, validate_cli_args, wide_z,
-    BoundedLogger, InstallDetection, Preset, RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_SUBKEY,
-    APP_VERSION, CONFIG_SUBKEY, CREATE_NO_WINDOW, CURSORS_SUBKEY, GUARDIAN_EXE_NAME,
-    GUARDIAN_RUN_VALUE, LEGACY_GUARDIAN_EXE_NAME, LEGACY_GUARDIAN_RUN_VALUE, PACK_VERSION,
-    PUBLISHER, RUN_SUBKEY, SCHEMES_SUBKEY, SETUP_EXE_NAME, TRAY_WND_CLASS, UNINSTALL_KEY_NAME,
-    UNINSTALL_PARENT_SUBKEY, UNINSTALL_SUBKEY,
+    BoundedLogger, InstallDetection, Preset, RegCloseKey, RegNotifyChangeKeyValue,
+    ACCESSIBILITY_SUBKEY, APP_VERSION, CONFIG_SUBKEY, CREATE_NO_WINDOW, CURSORS_SUBKEY,
+    GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, LEGACY_GUARDIAN_EXE_NAME, LEGACY_GUARDIAN_RUN_VALUE,
+    PACK_VERSION, PUBLISHER, RUN_SUBKEY, SCHEMES_SUBKEY, SETUP_EXE_NAME, TRAY_WND_CLASS,
+    UNINSTALL_KEY_NAME, UNINSTALL_PARENT_SUBKEY, UNINSTALL_SUBKEY,
 };
 pub use render::{create_split_cursor_hicon, draw_cursor_glyph, CursorGlyphSprite, DestroyCursor};
 
@@ -120,7 +120,8 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_cursor_backup_bytes_accepts_utf16le_and_utf8_and_rejects_corrupt_or_out_of_scope() {
+    fn test_validate_cursor_backup_bytes_accepts_utf16le_and_utf8_and_rejects_corrupt_or_out_of_scope(
+    ) {
         let utf8_ok = b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Control Panel\\Cursors]\r\n\"Arrow\"=\"C:\\\\Windows\\\\Cursors\\\\aero_arrow.cur\"\r\n";
         assert!(validate_cursor_backup_bytes(utf8_ok).is_ok());
 
@@ -162,8 +163,14 @@ mod tests {
             },
         );
         assert!(res.is_err());
-        assert!(!stopped, "guardian must not be stopped when backup is corrupt");
-        assert!(!cleaned, "metadata/files must not be removed when backup is corrupt");
+        assert!(
+            !stopped,
+            "guardian must not be stopped when backup is corrupt"
+        );
+        assert!(
+            !cleaned,
+            "metadata/files must not be removed when backup is corrupt"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -172,11 +179,15 @@ mod tests {
     fn test_is_guardian_image_path_enforces_install_root_and_binary_name() {
         let root = Path::new(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors");
         assert!(is_guardian_image_path(
-            Path::new(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\ModernInvertedCursorGuardian.exe"),
+            Path::new(
+                r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\ModernInvertedCursorGuardian.exe"
+            ),
             root
         ));
         assert!(is_guardian_image_path(
-            Path::new(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\ModernInvertedCursors-Guardian.exe"),
+            Path::new(
+                r"C:\Users\Demo\AppData\Local\ModernInvertedCursors\ModernInvertedCursors-Guardian.exe"
+            ),
             root
         ));
         assert!(!is_guardian_image_path(
@@ -197,8 +208,7 @@ mod tests {
             .args(["/C", "exit /B 7"])
             .spawn()
             .unwrap();
-        let outcome =
-            ev_early.wait_process_or_ready(cmd_early.as_raw_handle() as *mut std::ffi::c_void, 5000);
+        let outcome = ev_early.wait_process_or_ready(cmd_early.as_raw_handle(), 5000);
         let _ = cmd_early.wait();
         assert_eq!(outcome, ReadyWaitOutcome::ExitedEarly);
 
@@ -208,8 +218,7 @@ mod tests {
             .args(["/C", "ping -n 4 127.0.0.1 >nul"])
             .spawn()
             .unwrap();
-        let t_out =
-            ev_timeout.wait_process_or_ready(cmd_hang.as_raw_handle() as *mut std::ffi::c_void, 120);
+        let t_out = ev_timeout.wait_process_or_ready(cmd_hang.as_raw_handle(), 120);
         let _ = cmd_hang.kill();
         let _ = cmd_hang.wait();
         assert_eq!(t_out, ReadyWaitOutcome::TimedOut);
@@ -233,7 +242,10 @@ mod tests {
 
         cleanup_legacy_guardian_binary(&tmp, None);
         assert!(!legacy_guard.exists());
-        assert!(backup.exists(), "valid backup must remain intact across migration");
+        assert!(
+            backup.exists(),
+            "valid backup must remain intact across migration"
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -320,11 +332,19 @@ mod tests {
         assert!(cache.fast_stat_check(&tmp));
 
         // Corrupting size or deleting an asset immediately misses the stat cache.
-        fs::write(tmp.join(ASSETS[0].name), vec![0x55u8; (ASSETS[0].size as usize) + 1]).unwrap();
+        fs::write(
+            tmp.join(ASSETS[0].name),
+            vec![0x55u8; (ASSETS[0].size as usize) + 1],
+        )
+        .unwrap();
         assert!(!cache.fast_stat_check(&tmp));
 
         // Restoring byte size with wrong contents still fails cryptographic SHA-1 check cleanly.
-        fs::write(tmp.join(ASSETS[0].name), vec![0x55u8; ASSETS[0].size as usize]).unwrap();
+        fs::write(
+            tmp.join(ASSETS[0].name),
+            vec![0x55u8; ASSETS[0].size as usize],
+        )
+        .unwrap();
         let err = verify_asset_file(ASSETS[0], &tmp.join(ASSETS[0].name)).unwrap_err();
         assert!(err.contains("Git blob SHA-1 check"));
         let _ = fs::remove_dir_all(&tmp);
@@ -383,12 +403,6 @@ mod tests {
         )
         .is_err());
         assert!(validate_cli_args(&["--preset".into()], &bools, &req_vals, &opt_vals).is_err());
-        assert!(validate_cli_args(
-            &["--dpi=".into()],
-            &bools,
-            &req_vals,
-            &opt_vals
-        )
-        .is_err());
+        assert!(validate_cli_args(&["--dpi=".into()], &bools, &req_vals, &opt_vals).is_err());
     }
 }

@@ -37,7 +37,11 @@ extern "system" {
     fn GetCurrentProcessId() -> u32;
     fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
-    fn OpenProcess(dw_desired_access: u32, b_inherit_handle: i32, dw_process_id: u32) -> *mut c_void;
+    fn OpenProcess(
+        dw_desired_access: u32,
+        b_inherit_handle: i32,
+        dw_process_id: u32,
+    ) -> *mut c_void;
     fn TerminateProcess(h_process: *mut c_void, u_exit_code: u32) -> i32;
     fn WaitForSingleObject(h_handle: *mut c_void, dw_milliseconds: u32) -> u32;
     fn WaitForMultipleObjects(
@@ -52,7 +56,11 @@ extern "system" {
         b_initial_state: i32,
         lp_name: *const u16,
     ) -> *mut c_void;
-    fn OpenEventW(dw_desired_access: u32, b_inherit_handle: i32, lp_name: *const u16) -> *mut c_void;
+    fn OpenEventW(
+        dw_desired_access: u32,
+        b_inherit_handle: i32,
+        lp_name: *const u16,
+    ) -> *mut c_void;
     fn SetEvent(h_event: *mut c_void) -> i32;
     pub fn CloseHandle(h_object: *mut c_void) -> i32;
     fn CreateToolhelp32Snapshot(dw_flags: u32, th32_process_id: u32) -> *mut c_void;
@@ -66,6 +74,8 @@ pub fn find_tray_window() -> *mut c_void {
     unsafe { FindWindowW(w_cls.as_ptr(), std::ptr::null()) }
 }
 
+// Win32 HWND is an opaque kernel user handle, never dereferenced by Rust.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn window_process_id(hwnd: *mut c_void) -> Option<u32> {
     if hwnd.is_null() {
         return None;
@@ -108,8 +118,7 @@ pub fn is_guardian_image_path(exe_path: &Path, allowed_root: &Path) -> bool {
 
 pub fn process_image_path(pid: u32) -> Option<PathBuf> {
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    type QueryFullImageFn =
-        unsafe extern "system" fn(*mut c_void, u32, *mut u16, *mut u32) -> i32;
+    type QueryFullImageFn = unsafe extern "system" fn(*mut c_void, u32, *mut u16, *mut u32) -> i32;
 
     // SAFETY: `kernel32.dll` stays loaded in every Win32 process; opened process handle is closed before returning.
     unsafe {
@@ -131,7 +140,9 @@ pub fn process_image_path(pid: u32) -> Option<PathBuf> {
         let ok = query_fn(h_proc, 0, buf.as_mut_ptr(), &mut len);
         CloseHandle(h_proc);
         if ok != 0 && len > 0 {
-            Some(PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])))
+            Some(PathBuf::from(String::from_utf16_lossy(
+                &buf[..len as usize],
+            )))
         } else {
             None
         }
@@ -381,8 +392,7 @@ pub fn write_binary_retry(dest: &Path, bytes: &[u8]) -> Result<(), String> {
 
 pub fn is_safe_cleanup_target(path: &Path) -> bool {
     let norm = normalize_win_path_str(path);
-    norm.ends_with(".exe")
-        && (norm.contains("moderninvertedcursors") || norm.contains("mic-test-"))
+    norm.ends_with(".exe") && (norm.contains("moderninvertedcursors") || norm.contains("mic-test-"))
 }
 
 /// Schedules deletion of the running executable after process exit without interpolating

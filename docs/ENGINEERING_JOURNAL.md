@@ -120,3 +120,14 @@ Confirmed 14 distinct defects across baseline (`BUG-01` through `BUG-14`), inclu
    - Added `tests/integration_hardening.rs` (3 integration tests: simulated `v1.0.2` upgrade migration preserving `backup-original.reg`, corrupt/truncated/out-of-scope `.reg` restore rejection preserving Guardian files & backup, UTF-16LE backup roundtrip + 32-asset/17-role completeness).
    - **`30/30 PASSED`** across `x64` (`1.99.0`), `win7-win10-x64` (`1.75.0`), and `win7-win10-x86` (`1.75.0`).
    - Verified Multi-DPI (`96`, `120`, `144`, `192 DPI`), real `775x675` DPI-aware `PrintWindow` live Setup HWND keyboard interaction (`Tab -> Right -> Down -> Esc`), Setup single-instance mutex (`exit=0`), `--silent` failure exit (`exit=1` + `setup-error.log`), and sandbox Guardian endurance (`0.46 MB` WS, `116` Handles stable).
+
+---
+
+## Batch 08 — Final Regression Audit, Lint Hygiene, Docs Sync & Release Candidate Preparation
+
+1. **Code Hygiene & CI Hardening:**
+   - Added `rust-version = "1.75.0"` to `Cargo.toml`, removed redundant raw pointer casts (`src/lib.rs`, `src/bin/setup/install.rs`), replaced `Option::map_or` with `match` in `build.rs`, annotated Win32 opaque `HWND` handling in `src/ipc.rs`, and ran `cargo fmt --all`.
+   - Strengthened `.github/workflows/ci-and-release.yml` with `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` on `x64`, `--smoke-ui --dpi 144`, and negative `--silent` exit-code checks across all 4 matrix targets (`x64`, `arm64`, `win7-win10-x64`, `win7-win10-x86`).
+2. **Documentation & Release Synchronization:**
+   - Updated `README.md`, `docs/ARCHITECTURE.md`, `docs/TESTS_AND_BENCHMARKS.md`, `docs/POST_USAGE_NOTES.md`, `docs/RELEASE_CHECKLIST.md`, `docs/KNOWN_ISSUES.md`, and `AI_HANDOFF.md` to match current binaries, CLI flags, `30`-test count, and measured benchmarks.
+   - Verified post-edit `cargo fmt --check` (pass), `cargo clippy --all-targets -- -D warnings` (pass), `30/30` tests across all 3 local targets, and `dumpbin /IMPORTS` legacy checks before pushing `hardening/v1.1.0-audit` for CI and `v1.1.0-rc.1` prerelease preparation.

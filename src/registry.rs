@@ -19,8 +19,7 @@ pub const TRAY_WND_CLASS: &str = "ModernInvertedCursorGuardianTrayWnd";
 
 pub const RUN_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 pub const CONFIG_SUBKEY: &str = r"Software\ModernInvertedCursors";
-pub const UNINSTALL_PARENT_SUBKEY: &str =
-    r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+pub const UNINSTALL_PARENT_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
 pub const UNINSTALL_SUBKEY: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ModernInvertedCursors";
 pub const UNINSTALL_KEY_NAME: &str = "ModernInvertedCursors";
@@ -98,7 +97,11 @@ impl Preset {
     pub fn custom_files(self) -> (&'static str, &'static str, &'static str) {
         match self {
             Preset::Regular => ("arrow.cur", "help.cur", "working.ani"),
-            Preset::NoTail => ("arrow_no_tail.cur", "help_no_tail.cur", "working_no_tail.ani"),
+            Preset::NoTail => (
+                "arrow_no_tail.cur",
+                "help_no_tail.cur",
+                "working_no_tail.ani",
+            ),
             Preset::TailDetached => (
                 "arrow_tail_detached.cur",
                 "help_tail_detached.cur",
@@ -136,7 +139,11 @@ extern "system" {
     fn GetLocalTime(lp_system_time: *mut SystemTimeWin);
     fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
     fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
-    fn LoadLibraryExW(lp_lib_file_name: *const u16, h_file: *mut c_void, dw_flags: u32) -> *mut c_void;
+    fn LoadLibraryExW(
+        lp_lib_file_name: *const u16,
+        h_file: *mut c_void,
+        dw_flags: u32,
+    ) -> *mut c_void;
     fn GetSystemDirectoryW(lp_buffer: *mut u16, u_size: u32) -> u32;
 }
 
@@ -293,7 +300,11 @@ impl BoundedLogger {
         unsafe {
             GetLocalTime(&mut st);
         }
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&self.path) {
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
             let _ = writeln!(
                 f,
                 "[{:04}-{:02}-{:02} {:02}:{:02}:{:02}] {}",
@@ -425,7 +436,9 @@ pub fn reg_set_string(
         )
     };
     if open != 0 || key.is_null() {
-        return Err(format!("RegCreateKeyExW({subkey}) failed with status={open}"));
+        return Err(format!(
+            "RegCreateKeyExW({subkey}) failed with status={open}"
+        ));
     }
 
     let w_name = value_name.map(wide_z);
@@ -496,13 +509,20 @@ pub fn reg_sync_cursor_values(
         )
     };
     if open != 0 || key.is_null() {
-        return Err(format!("RegCreateKeyExW({subkey}) failed with status={open}"));
+        return Err(format!(
+            "RegCreateKeyExW({subkey}) failed with status={open}"
+        ));
     }
 
     let mut changed = false;
     let mut buf = vec![0u16; 260];
 
-    let sync_str = |name_opt: Option<&str>, expand_sz: bool, desired: &str, buf: &mut Vec<u16>, changed: &mut bool| -> Result<(), String> {
+    let sync_str = |name_opt: Option<&str>,
+                    expand_sz: bool,
+                    desired: &str,
+                    buf: &mut Vec<u16>,
+                    changed: &mut bool|
+     -> Result<(), String> {
         let w_name = name_opt.map(wide_z);
         let name_ptr = w_name.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
         let expected_type = if expand_sz { REG_EXPAND_SZ } else { REG_SZ };
@@ -539,7 +559,10 @@ pub fn reg_sync_cursor_values(
         }
         let matches = if status == 0 && reg_type == expected_type && bytes >= 2 {
             let max_u16 = (bytes as usize / 2).min(buf.len());
-            let end = buf[..max_u16].iter().position(|&c| c == 0).unwrap_or(max_u16);
+            let end = buf[..max_u16]
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(max_u16);
             String::from_utf16_lossy(&buf[..end]) == desired
         } else {
             false
@@ -643,7 +666,9 @@ pub fn reg_set_dword(subkey: &str, value_name: &str, val: u32) -> Result<(), Str
         )
     };
     if open != 0 || key.is_null() {
-        return Err(format!("RegCreateKeyExW({subkey}) failed with status={open}"));
+        return Err(format!(
+            "RegCreateKeyExW({subkey}) failed with status={open}"
+        ));
     }
 
     let w_name = wide_z(value_name);
@@ -846,13 +871,11 @@ pub fn parse_preset_arg(args: &[String]) -> Result<Option<Preset>, String> {
             let value = args.get(i + 1).ok_or_else(|| {
                 "--preset requires regular|no-tail|tail-detached|compact".to_string()
             })?;
-            found = Some(
-                Preset::from_cli(value).ok_or_else(|| format!("Unknown preset: {value}"))?,
-            );
+            found =
+                Some(Preset::from_cli(value).ok_or_else(|| format!("Unknown preset: {value}"))?);
         } else if let Some(value) = args[i].strip_prefix("--preset=") {
-            found = Some(
-                Preset::from_cli(value).ok_or_else(|| format!("Unknown preset: {value}"))?,
-            );
+            found =
+                Some(Preset::from_cli(value).ok_or_else(|| format!("Unknown preset: {value}"))?);
         } else {
             let short = match args[i].as_str() {
                 "--compact" => Some(Preset::Compact),

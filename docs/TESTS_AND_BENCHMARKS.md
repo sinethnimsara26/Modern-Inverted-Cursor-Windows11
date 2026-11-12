@@ -1,23 +1,18 @@
 # Test Results & Benchmarks
 
-All tests and benchmarks below were executed directly on **Windows 11 (`x86_64-pc-windows-msvc`, 125% display DPI / `dpi=120`)** using Rust `1.99.0` (`rustc 1.99.0`, `cargo 1.99.0`).
+All local tests and benchmarks below were executed directly on **Windows 11 (`x86_64-pc-windows-msvc`, 125% display DPI / `dpi=120`)** using Rust `1.99.0` (modern) and Rust `1.75.0` (legacy `win7-win10-*` builds).
 
 ---
 
-## 1. Automated Unit Tests (`cargo test`)
+## 1. Automated Unit & Integration Tests (`30/30 PASSED`)
 
-**Result: `8/8 PASSED` (`0` failed, `0` warnings)** across all three crate targets:
+**Result (`v1.1.0-rc.1`):** **`30/30 PASSED` (`0` failed, `0` warnings)** across all three local targets (`x64`, `win7-win10-x64`, `win7-win10-x86`):
+- **Core library (`src/lib.rs`, `20` tests):** Git blob SHA-1, balanced 4px size curve, preset/role completeness (`17` roles), 4×4 cursor glyph rendering & `CursorGlyphSprite` pixel parity, Win32 `HICON` creation, `.reg` UTF-16LE/UTF-8 validation & fail-safe restore (`perform_validated_restore`), targeted `ProcessEntry32W` & Guardian image-path matching, `NamedReadyEvent` crash/timeout detection, legacy `v1.0.x` migration preserving valid backup, same-size hash-tamper rejection, `AssetVerifyCache` fast-stat hit/tamper invalidation, `load_system_dll` System32 pinning, `is_safe_cleanup_target`, atomic `register_and_apply` pre-validation, single-HKEY `reg_sync_cursor_values` write elision, and `validate_cli_args` strictness.
+- **Guardian (`src/bin/guardian.rs`, `1` test):** Win32 tray `NotifyIconDataW` (`976` 64-bit / `956` 32-bit) & `Msg` (`48` / `28`) ABI sizes.
+- **Setup (`src/bin/setup/main.rs`, `6` tests):** Embedded Guardian non-empty PE header & machine match, Win32 struct ABI sizes, child readiness crash & timeout detection, headless invocation detection, Setup maintenance binary sync, and `focus_order` keyboard navigation states.
+- **Integration suite (`tests/integration_hardening.rs`, `3` tests):** Simulated `v1.0.2 -> v1.1.0-rc.1` migration preserving `backup-original.reg` & removing legacy Guardian, corrupt/truncated/out-of-scope `.reg` restore rejection preserving active Guardian/backup, and UTF-16LE `.reg` roundtrip + `32` assets / `17` roles check.
 
-| Target | Test | What It Verifies | Status |
-| :--- | :--- | :--- | :--- |
-| `src/lib.rs` | `test_git_blob_sha1_matches_git_spec` | Pure-Rust Git blob SHA-1 hash (`blob 6\0hello\n`) matches Git CLI digest | PASS |
-| `src/lib.rs` | `test_balanced_cursor_size_progression` | Clamping & 4 px balanced steps (`0->32`, `1->32`, `2->36`, `15->88`, `99->88`) | PASS |
-| `src/lib.rs` | `test_preset_cli_and_roles_match` | All 4 CLI presets round-trip and generate all 17 Windows cursor roles | PASS |
-| `src/lib.rs` | `test_split_cursor_glyph_renders_distinct_presets` | 4×4 supersampled glyph rasterizer renders distinct non-empty output per preset | PASS |
-| `src/lib.rs` | `test_create_split_cursor_hicon_succeeds` | In-memory `CreateDIBSection` + `CreateIconIndirect` produces valid Win32 `HICON` | PASS |
-| `src/bin/guardian.rs` | `test_win32_tray_struct_sizes_match_sdk` | 64-bit Win32 ABI sizes match SDK headers (`NOTIFYICONDATAW=976`, `MSG=48`) | PASS |
-| `src/bin/setup.rs` | `test_win32_setup_structs_match_sdk` | 64-bit Win32 GUI struct sizes (`TRACKMOUSEEVENT=24`, `MONITORINFO=40`, `PAINTSTRUCT=72`, `BITMAPINFOHEADER=40`) | PASS |
-| `src/bin/setup.rs` | `test_embedded_guardian_is_nonempty_pe_binary` | Embedded `ModernInvertedCursorGuardian.exe` slice is non-empty valid `MZ` PE binary | PASS |
+See [docs/TEST_EVIDENCE.md](TEST_EVIDENCE.md) and [docs/PERFORMANCE_REPORT.md](PERFORMANCE_REPORT.md) for detailed logs and distributions.
 
 ---
 

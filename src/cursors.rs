@@ -219,7 +219,9 @@ pub fn register_and_apply(
     // Phase 2: Synchronize HKCU scheme & cursor values once (opening `CURSORS_SUBKEY` once and
     // eliding writes that already match verbatim).
     let scheme_string = values.join(",");
-    if reg_get_string(SCHEMES_SUBKEY, Some(preset.name())).as_deref() != Some(scheme_string.as_str()) {
+    if reg_get_string(SCHEMES_SUBKEY, Some(preset.name())).as_deref()
+        != Some(scheme_string.as_str())
+    {
         reg_set_string(SCHEMES_SUBKEY, Some(preset.name()), true, &scheme_string)?;
     }
     let pairs: Vec<(&str, &str)> = ROLES
@@ -247,7 +249,9 @@ pub fn register_and_apply(
                     }
                 }
                 let _ = reload_cursors();
-                return Err(format!("SetSystemCursor failed for {label} / {id} (err={err})"));
+                return Err(format!(
+                    "SetSystemCursor failed for {label} / {id} (err={err})"
+                ));
             }
         }
     }

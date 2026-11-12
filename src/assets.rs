@@ -25,38 +25,166 @@ pub struct Asset {
 }
 
 pub const ASSETS: &[Asset] = &[
-    Asset { name: "arrow.cur", size: 2246, git_sha1: "325739ebbc8a589aa757b7a7f19194bd0e6afd3a" },
-    Asset { name: "arrow_no_tail.cur", size: 2384, git_sha1: "8a503406723a840324b966c46074ca7257b8b145" },
-    Asset { name: "arrow_no_tail_smaller.cur", size: 2246, git_sha1: "daf30b0336f061a1a7961e1dd0dea9d1ce7ccd40" },
-    Asset { name: "arrow_no_tail_smaller_v2.cur", size: 2246, git_sha1: "5e7990e298d85a4d8eb205e0b64a2b7d06b3f2b1" },
-    Asset { name: "arrow_tail_detached.cur", size: 2246, git_sha1: "aa8082e301909e7bbf0bee1fdeb47db961f6d34a" },
-    Asset { name: "beam.cur", size: 2246, git_sha1: "87c55d6e1a8d819ac80e4edd1d8afe4e35846f5a" },
-    Asset { name: "beam_v2.cur", size: 2246, git_sha1: "b092bcf3b77e8cd9413c52e71d9a0a64afabaa69" },
-    Asset { name: "busy.ani", size: 5474, git_sha1: "fa36f833b346a3d6310458d0a6bc30ec1c8657ad" },
-    Asset { name: "cross.cur", size: 2246, git_sha1: "247947ea4293cb80fe60fe7143ae5c8d9633b7ad" },
-    Asset { name: "diagonal_1.cur", size: 2246, git_sha1: "fe4205fd226707e165e1c9bc6ebf040419df33d2" },
-    Asset { name: "diagonal_2.cur", size: 2246, git_sha1: "2244e646b88022bd3119a16ae7d17ee88aca88a9" },
-    Asset { name: "help.cur", size: 2246, git_sha1: "d807f02924caa159d3bebd138af570bd6dd6ae3e" },
-    Asset { name: "help_no_tail.cur", size: 2246, git_sha1: "fc3985098751b3d6e38f32ae43a9e736cafbdad1" },
-    Asset { name: "help_tail_detached.cur", size: 326, git_sha1: "b3a1e4dcba4e4b2f24ade81dda0eece44e224d4d" },
-    Asset { name: "horizontal.cur", size: 2246, git_sha1: "a38b02b149045421513ca7954d07581a6ae61745" },
-    Asset { name: "horizontal_v2.cur", size: 2246, git_sha1: "8c7888da14a7a13441c56db830877df91024fd7d" },
-    Asset { name: "link.cur", size: 2246, git_sha1: "86dae854fc5479674cca5ea25986b87c0ac2f3e0" },
-    Asset { name: "link_v2.cur", size: 2246, git_sha1: "01eab41a23bbdaaf9f84e449f846a4f233777b68" },
-    Asset { name: "move.cur", size: 2246, git_sha1: "6fdb0c4e3812c1cb896e5c45d4f691de53d80e84" },
-    Asset { name: "move_v2.cur", size: 326, git_sha1: "6df1bcd2bea99c47a025d9f4dd03db9a3a6b3a98" },
-    Asset { name: "pen.cur", size: 2246, git_sha1: "e94d2d6a7182abad2cda2b75434ed37ea7d9ebbc" },
-    Asset { name: "special.cur", size: 2246, git_sha1: "dbb6b1fac453fb52ae1cfc87d09ee907373b19d3" },
-    Asset { name: "unavailable.cur", size: 8774, git_sha1: "70496b18014075e2598f61c87ebd2c790174eb1c" },
-    Asset { name: "unavailable_v2.cur", size: 2246, git_sha1: "4baceb98c400b4b6836a35d4e77b3fa7e76ad68d" },
-    Asset { name: "unavailable_v3.cur", size: 2246, git_sha1: "d3e0901c59ec8494d8fc0a12caca418bac8b65ad" },
-    Asset { name: "vertical.cur", size: 2246, git_sha1: "f6b8c7d085550f01b23a911d617b817bbac87d7d" },
-    Asset { name: "vertical_v2.cur", size: 2246, git_sha1: "57b4a71f8fb6ffc70a169c65d3a561887d193aac" },
-    Asset { name: "working.ani", size: 5474, git_sha1: "fcced8db8402d254a3f2e1e635bdb50dd334016c" },
-    Asset { name: "working_no_tail.ani", size: 5474, git_sha1: "0c368f9a121a14c7c581ccfb60c427bf5093f77f" },
-    Asset { name: "working_tail_detached.ani", size: 5474, git_sha1: "dec0cc444841031357b0b1a1b7189bd61340018a" },
-    Asset { name: "working_tail_detached_v2.ani", size: 5474, git_sha1: "9f3656efe73c669aead22627e1f0bc854bab8b1a" },
-    Asset { name: "working_tail_detached_v3.ani", size: 2072, git_sha1: "c47132bee21ac2941c6db45a72590f1333876907" },
+    Asset {
+        name: "arrow.cur",
+        size: 2246,
+        git_sha1: "325739ebbc8a589aa757b7a7f19194bd0e6afd3a",
+    },
+    Asset {
+        name: "arrow_no_tail.cur",
+        size: 2384,
+        git_sha1: "8a503406723a840324b966c46074ca7257b8b145",
+    },
+    Asset {
+        name: "arrow_no_tail_smaller.cur",
+        size: 2246,
+        git_sha1: "daf30b0336f061a1a7961e1dd0dea9d1ce7ccd40",
+    },
+    Asset {
+        name: "arrow_no_tail_smaller_v2.cur",
+        size: 2246,
+        git_sha1: "5e7990e298d85a4d8eb205e0b64a2b7d06b3f2b1",
+    },
+    Asset {
+        name: "arrow_tail_detached.cur",
+        size: 2246,
+        git_sha1: "aa8082e301909e7bbf0bee1fdeb47db961f6d34a",
+    },
+    Asset {
+        name: "beam.cur",
+        size: 2246,
+        git_sha1: "87c55d6e1a8d819ac80e4edd1d8afe4e35846f5a",
+    },
+    Asset {
+        name: "beam_v2.cur",
+        size: 2246,
+        git_sha1: "b092bcf3b77e8cd9413c52e71d9a0a64afabaa69",
+    },
+    Asset {
+        name: "busy.ani",
+        size: 5474,
+        git_sha1: "fa36f833b346a3d6310458d0a6bc30ec1c8657ad",
+    },
+    Asset {
+        name: "cross.cur",
+        size: 2246,
+        git_sha1: "247947ea4293cb80fe60fe7143ae5c8d9633b7ad",
+    },
+    Asset {
+        name: "diagonal_1.cur",
+        size: 2246,
+        git_sha1: "fe4205fd226707e165e1c9bc6ebf040419df33d2",
+    },
+    Asset {
+        name: "diagonal_2.cur",
+        size: 2246,
+        git_sha1: "2244e646b88022bd3119a16ae7d17ee88aca88a9",
+    },
+    Asset {
+        name: "help.cur",
+        size: 2246,
+        git_sha1: "d807f02924caa159d3bebd138af570bd6dd6ae3e",
+    },
+    Asset {
+        name: "help_no_tail.cur",
+        size: 2246,
+        git_sha1: "fc3985098751b3d6e38f32ae43a9e736cafbdad1",
+    },
+    Asset {
+        name: "help_tail_detached.cur",
+        size: 326,
+        git_sha1: "b3a1e4dcba4e4b2f24ade81dda0eece44e224d4d",
+    },
+    Asset {
+        name: "horizontal.cur",
+        size: 2246,
+        git_sha1: "a38b02b149045421513ca7954d07581a6ae61745",
+    },
+    Asset {
+        name: "horizontal_v2.cur",
+        size: 2246,
+        git_sha1: "8c7888da14a7a13441c56db830877df91024fd7d",
+    },
+    Asset {
+        name: "link.cur",
+        size: 2246,
+        git_sha1: "86dae854fc5479674cca5ea25986b87c0ac2f3e0",
+    },
+    Asset {
+        name: "link_v2.cur",
+        size: 2246,
+        git_sha1: "01eab41a23bbdaaf9f84e449f846a4f233777b68",
+    },
+    Asset {
+        name: "move.cur",
+        size: 2246,
+        git_sha1: "6fdb0c4e3812c1cb896e5c45d4f691de53d80e84",
+    },
+    Asset {
+        name: "move_v2.cur",
+        size: 326,
+        git_sha1: "6df1bcd2bea99c47a025d9f4dd03db9a3a6b3a98",
+    },
+    Asset {
+        name: "pen.cur",
+        size: 2246,
+        git_sha1: "e94d2d6a7182abad2cda2b75434ed37ea7d9ebbc",
+    },
+    Asset {
+        name: "special.cur",
+        size: 2246,
+        git_sha1: "dbb6b1fac453fb52ae1cfc87d09ee907373b19d3",
+    },
+    Asset {
+        name: "unavailable.cur",
+        size: 8774,
+        git_sha1: "70496b18014075e2598f61c87ebd2c790174eb1c",
+    },
+    Asset {
+        name: "unavailable_v2.cur",
+        size: 2246,
+        git_sha1: "4baceb98c400b4b6836a35d4e77b3fa7e76ad68d",
+    },
+    Asset {
+        name: "unavailable_v3.cur",
+        size: 2246,
+        git_sha1: "d3e0901c59ec8494d8fc0a12caca418bac8b65ad",
+    },
+    Asset {
+        name: "vertical.cur",
+        size: 2246,
+        git_sha1: "f6b8c7d085550f01b23a911d617b817bbac87d7d",
+    },
+    Asset {
+        name: "vertical_v2.cur",
+        size: 2246,
+        git_sha1: "57b4a71f8fb6ffc70a169c65d3a561887d193aac",
+    },
+    Asset {
+        name: "working.ani",
+        size: 5474,
+        git_sha1: "fcced8db8402d254a3f2e1e635bdb50dd334016c",
+    },
+    Asset {
+        name: "working_no_tail.ani",
+        size: 5474,
+        git_sha1: "0c368f9a121a14c7c581ccfb60c427bf5093f77f",
+    },
+    Asset {
+        name: "working_tail_detached.ani",
+        size: 5474,
+        git_sha1: "dec0cc444841031357b0b1a1b7189bd61340018a",
+    },
+    Asset {
+        name: "working_tail_detached_v2.ani",
+        size: 5474,
+        git_sha1: "9f3656efe73c669aead22627e1f0bc854bab8b1a",
+    },
+    Asset {
+        name: "working_tail_detached_v3.ani",
+        size: 2072,
+        git_sha1: "c47132bee21ac2941c6db45a72590f1333876907",
+    },
 ];
 
 #[link(name = "kernel32")]
@@ -186,12 +314,9 @@ pub fn parse_https_url(url: &str) -> Option<(&str, &str)> {
 
 type WinHttpOpenFn =
     unsafe extern "system" fn(*const u16, u32, *const u16, *const u16, u32) -> *mut c_void;
-type WinHttpSetOptionFn =
-    unsafe extern "system" fn(*mut c_void, u32, *const c_void, u32) -> i32;
-type WinHttpSetTimeoutsFn =
-    unsafe extern "system" fn(*mut c_void, i32, i32, i32, i32) -> i32;
-type WinHttpConnectFn =
-    unsafe extern "system" fn(*mut c_void, *const u16, u16, u32) -> *mut c_void;
+type WinHttpSetOptionFn = unsafe extern "system" fn(*mut c_void, u32, *const c_void, u32) -> i32;
+type WinHttpSetTimeoutsFn = unsafe extern "system" fn(*mut c_void, i32, i32, i32, i32) -> i32;
+type WinHttpConnectFn = unsafe extern "system" fn(*mut c_void, *const u16, u16, u32) -> *mut c_void;
 type WinHttpOpenRequestFn = unsafe extern "system" fn(
     *mut c_void,
     *const u16,
@@ -201,26 +326,12 @@ type WinHttpOpenRequestFn = unsafe extern "system" fn(
     *const *const u16,
     u32,
 ) -> *mut c_void;
-type WinHttpSendRequestFn = unsafe extern "system" fn(
-    *mut c_void,
-    *const u16,
-    u32,
-    *mut c_void,
-    u32,
-    u32,
-    usize,
-) -> i32;
+type WinHttpSendRequestFn =
+    unsafe extern "system" fn(*mut c_void, *const u16, u32, *mut c_void, u32, u32, usize) -> i32;
 type WinHttpReceiveResponseFn = unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32;
-type WinHttpQueryHeadersFn = unsafe extern "system" fn(
-    *mut c_void,
-    u32,
-    *const u16,
-    *mut c_void,
-    *mut u32,
-    *mut u32,
-) -> i32;
-type WinHttpReadDataFn =
-    unsafe extern "system" fn(*mut c_void, *mut u8, u32, *mut u32) -> i32;
+type WinHttpQueryHeadersFn =
+    unsafe extern "system" fn(*mut c_void, u32, *const u16, *mut c_void, *mut u32, *mut u32) -> i32;
+type WinHttpReadDataFn = unsafe extern "system" fn(*mut c_void, *mut u8, u32, *mut u32) -> i32;
 type WinHttpCloseFn = unsafe extern "system" fn(*mut c_void) -> i32;
 
 #[derive(Clone, Copy)]
@@ -309,8 +420,7 @@ impl WinHttpHostSession {
             let mut h_session =
                 (api.open_fn)(agent.as_ptr(), 0, std::ptr::null(), std::ptr::null(), 0);
             if h_session.is_null() {
-                h_session =
-                    (api.open_fn)(agent.as_ptr(), 4, std::ptr::null(), std::ptr::null(), 0);
+                h_session = (api.open_fn)(agent.as_ptr(), 4, std::ptr::null(), std::ptr::null(), 0);
             }
             if h_session.is_null() {
                 return Err(format!("WinHttpOpen failed (err={})", GetLastError()));
@@ -373,17 +483,30 @@ impl WinHttpHostSession {
                 0x0080_0000,
             );
             if h_req.is_null() {
-                return Err(format!("WinHttpOpenRequest failed (err={})", GetLastError()));
+                return Err(format!(
+                    "WinHttpOpenRequest failed (err={})",
+                    GetLastError()
+                ));
             }
             let req = SafeWinHttpHandle {
                 handle: h_req,
                 close_fn: self.api.close_fn,
             };
 
-            if (self.api.send_req_fn)(req.handle, std::ptr::null(), 0, std::ptr::null_mut(), 0, 0, 0)
-                == 0
+            if (self.api.send_req_fn)(
+                req.handle,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+            ) == 0
             {
-                return Err(format!("WinHttpSendRequest failed (err={})", GetLastError()));
+                return Err(format!(
+                    "WinHttpSendRequest failed (err={})",
+                    GetLastError()
+                ));
             }
             if (self.api.recv_resp_fn)(req.handle, std::ptr::null_mut()) == 0 {
                 return Err(format!(
@@ -606,8 +729,7 @@ impl AssetVerifyCache {
 /// Ensures every asset exists on disk and passes full Git blob SHA-1 + byte-size verification
 /// (no size-only hash bypass).
 pub fn ensure_all_assets(dir: &Path, _verify_all: bool, log: &BoundedLogger) -> Result<(), String> {
-    fs::create_dir_all(dir)
-        .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let mut missing = Vec::new();
     for asset in ASSETS {
         let p = dir.join(asset.name);
@@ -619,8 +741,8 @@ pub fn ensure_all_assets(dir: &Path, _verify_all: bool, log: &BoundedLogger) -> 
     if missing.is_empty() {
         return Ok(());
     }
-    let session = parse_https_url(REPO_RAW)
-        .and_then(|(host, _)| WinHttpHostSession::open(host).ok());
+    let session =
+        parse_https_url(REPO_RAW).and_then(|(host, _)| WinHttpHostSession::open(host).ok());
     for asset in missing {
         download_with_session(asset, dir, Some(log), session.as_ref())?;
     }
@@ -635,8 +757,7 @@ pub fn prepare_assets_parallel<F>(
 where
     F: FnMut(usize, usize, &'static str),
 {
-    fs::create_dir_all(dir)
-        .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
 
     let mut missing = Vec::new();
     let total = ASSETS.len();

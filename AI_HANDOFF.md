@@ -17,8 +17,8 @@
 | **Batch 04** | Security, `build.rs` fail-closed gate, WinHTTP timeouts/size-caps/session reuse, System32 DLL pinning & atomic apply | **DONE** | `2b5c067` |
 | **Batch 05** | Guardian memory, handle, GDI & CPU wakeup optimization | **DONE** | `6b77c81` |
 | **Batch 06** | Setup UI dirty-region / static-surface caching, timer stop-when-idle & DPI/keyboard accessibility | **DONE** | `b442103` |
-| **Batch 07** | Comprehensive unit, integration, UI Automation interaction, multi-DPI (`100–200%`) & failure-injection tests | **DONE** | *(pending commit)* |
-| **Batch 08** | Final regression audit, CI green verification across all 4 targets, draft PR & `v1.1.0-rc.1` | **IN PROGRESS** | — |
+| **Batch 07** | Comprehensive unit, integration, UI Automation interaction, multi-DPI (`100–200%`) & failure-injection tests | **DONE** | `f6d3187` |
+| **Batch 08** | Final regression audit, CI green verification across all 4 targets, draft PR & `v1.1.0-rc.1` | **DONE** | *(final commit & RC publish)* |
 
 ---
 
@@ -32,4 +32,4 @@
   - Startup `HKCU\...\Run\ModernInvertedCursorGuardian` enabled
 
 ## Immediate Next Action
-Proceed to **Batch 08**: run `cargo fmt`, `cargo clippy`, sync `README.md`, `docs/ARCHITECTURE.md`, `docs/TESTS_AND_BENCHMARKS.md`, `docs/POST_USAGE_NOTES.md`, `docs/RELEASE_CHECKLIST.md`, `docs/KNOWN_ISSUES.md`, push `hardening/v1.1.0-audit`, verify all 4 CI matrix jobs green (`x64`, `arm64`, `win7-win10-x64`, `win7-win10-x86`), open Draft PR + prerelease `v1.1.0-rc.1`.
+All 8 engineering audit, hardening, optimization, and testing batches are complete on branch `hardening/v1.1.0-audit` (`v1.1.0-rc.1`). Await user approval before merging Draft PR into `main` or promoting `v1.1.0` to Latest stable release.

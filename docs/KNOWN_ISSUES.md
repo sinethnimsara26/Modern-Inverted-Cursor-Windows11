@@ -17,5 +17,5 @@
    - **Severity:** Upstream Design Constraint
    - **Details:** True Windows pixel-XOR inversion requires monochrome/low-color-depth cursor masks rather than 32-bit ARGB alpha-blended edges; extreme accessibility sizes (>88 px) show stair-stepping, which the balanced `32..88 px` curve mitigates.
 
-5. **Open Pre-Batch-02 Baseline Defects (`BUG-01`..`BUG-14`)**
-   - Currently open at Batch 01 baseline (`398f09b`) and scheduled for remediation across Batches 02–06 (see `docs/BUG_AUDIT.md`).
+5. **Resolved Pre-Hardening Defects (`BUG-01`..`BUG-15`):**
+   - Resolved across Batches 02–07 on branch `hardening/v1.1.0-audit` (`v1.1.0-rc.1`), with unit, integration, multi-DPI, and live HWND tests verifying every fix (see [docs/BUG_AUDIT.md](BUG_AUDIT.md) and [docs/TEST_EVIDENCE.md](TEST_EVIDENCE.md)).

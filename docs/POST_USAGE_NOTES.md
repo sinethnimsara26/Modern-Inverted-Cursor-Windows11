@@ -1,4 +1,10 @@
-# Post-Usage Notes & Live System Verification
+**Updated for `v1.1.0-rc.1` (Hardened Release Candidate):**
+- **Installed Binaries:** `%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursors-Setup.exe` (maintenance app registered in Windows Installed Apps with `ModifyPath`, `NoModify=0`, `NoRepair=0`) and `%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursors-Guardian.exe` (silent system-tray daemon).
+- **Live Upgrade Verification Observed:** Upgrading over the pre-existing `v1.0.0` `ModernInvertedCursorGuardian.exe` cleanly preserved `backup-original.reg` (`4,954` bytes, `2026-10-03`), stopped the previous PID cleanly without `taskkill /IM`, deployed the `v1.1.0-rc.1` Setup + Guardian pair, removed the superseded legacy executable, and applied `Compact (36 px)`.
+
+---
+
+# Legacy `v1.0.x` Post-Usage Notes & Live System Verification
 
 **Recorded:** 2026-11-12  
 **Target Environment:** Windows 11 (x64, 125% DPI / `dpi=120`)  

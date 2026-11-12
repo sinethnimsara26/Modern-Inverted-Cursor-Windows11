@@ -2,6 +2,7 @@
 name = "modern-inverted-cursor"
 version = "1.1.0-rc.1"
 edition = "2021"
+rust-version = "1.75.0"
 description = "Pure-Rust Windows 7–11 Dark Mode installer, maintenance tool, and event-driven system-tray guardian for Modern Inverted Mouse Cursors v3.6.2 (x64, ARM64, and Legacy Win7–Win10 x64/x86)"
 license = "MIT"
 

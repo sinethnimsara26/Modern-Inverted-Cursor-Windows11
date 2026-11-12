@@ -105,30 +105,10 @@ fn preset_polys(preset: Preset) -> PolySpec {
         (0.46, 0.57),
         (0.69, 0.57),
     ];
-    const NO_TAIL: &[(f32, f32)] = &[
-        (0.22, 0.12),
-        (0.22, 0.78),
-        (0.43, 0.61),
-        (0.71, 0.61),
-    ];
-    const DETACHED_HEAD: &[(f32, f32)] = &[
-        (0.22, 0.09),
-        (0.22, 0.71),
-        (0.42, 0.56),
-        (0.70, 0.56),
-    ];
-    const DETACHED_TAIL: &[(f32, f32)] = &[
-        (0.43, 0.68),
-        (0.52, 0.88),
-        (0.62, 0.83),
-        (0.53, 0.64),
-    ];
-    const COMPACT: &[(f32, f32)] = &[
-        (0.28, 0.18),
-        (0.28, 0.71),
-        (0.45, 0.58),
-        (0.67, 0.58),
-    ];
+    const NO_TAIL: &[(f32, f32)] = &[(0.22, 0.12), (0.22, 0.78), (0.43, 0.61), (0.71, 0.61)];
+    const DETACHED_HEAD: &[(f32, f32)] = &[(0.22, 0.09), (0.22, 0.71), (0.42, 0.56), (0.70, 0.56)];
+    const DETACHED_TAIL: &[(f32, f32)] = &[(0.43, 0.68), (0.52, 0.88), (0.62, 0.83), (0.53, 0.64)];
+    const COMPACT: &[(f32, f32)] = &[(0.28, 0.18), (0.28, 0.71), (0.45, 0.58), (0.67, 0.58)];
 
     match preset {
         Preset::Regular => (REGULAR, None, 0.22),
@@ -326,8 +306,10 @@ impl CursorGlyphSprite {
                 }
                 let inv = 255 - a;
                 let dst = pixels[idx];
-                let out_r = (((src >> 16) & 0xFF) + (((dst >> 16) & 0xFF) * inv + 127) / 255).min(255);
-                let out_g = (((src >> 8) & 0xFF) + (((dst >> 8) & 0xFF) * inv + 127) / 255).min(255);
+                let out_r =
+                    (((src >> 16) & 0xFF) + (((dst >> 16) & 0xFF) * inv + 127) / 255).min(255);
+                let out_g =
+                    (((src >> 8) & 0xFF) + (((dst >> 8) & 0xFF) * inv + 127) / 255).min(255);
                 let out_b = ((src & 0xFF) + ((dst & 0xFF) * inv + 127) / 255).min(255);
                 pixels[idx] = 0xFF00_0000 | (out_r << 16) | (out_g << 8) | out_b;
             }

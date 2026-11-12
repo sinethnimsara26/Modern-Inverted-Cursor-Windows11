@@ -4,16 +4,14 @@ use modern_inverted_cursor::{
     balanced_cursor_size, cleanup_legacy_guardian_binary, current_accessibility_step,
     export_backup, find_tray_window, normalize_win_path_str, perform_validated_restore,
     prepare_assets_parallel, read_log_tail, reg_delete_value, reg_get_string, reg_set_string,
-    register_uninstall_entry, save_preset, set_startup_enabled, stop_targeted_guardians,
-    unregister_uninstall_entry, window_process_id, write_binary_retry, schedule_self_delete,
+    register_uninstall_entry, save_preset, schedule_self_delete, set_startup_enabled,
+    stop_targeted_guardians, unregister_uninstall_entry, window_process_id, write_binary_retry,
     BoundedLogger, NamedReadyEvent, Preset, ReadyWaitOutcome, APP_VERSION, CONFIG_SUBKEY,
-    GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, LEGACY_GUARDIAN_EXE_NAME,
-    LEGACY_GUARDIAN_RUN_VALUE, RUN_SUBKEY, SETUP_EXE_NAME, UNINSTALL_SUBKEY,
+    GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, LEGACY_GUARDIAN_EXE_NAME, LEGACY_GUARDIAN_RUN_VALUE,
+    RUN_SUBKEY, SETUP_EXE_NAME, UNINSTALL_SUBKEY,
 };
 use std::{
-    env,
-    ffi::c_void,
-    fs,
+    env, fs,
     os::windows::{io::AsRawHandle, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -29,7 +27,7 @@ pub fn verify_child_readiness(
     timeout_ms: u32,
     log_path: &Path,
 ) -> Result<Child, String> {
-    let proc_handle = child.as_raw_handle() as *mut c_void;
+    let proc_handle = child.as_raw_handle();
     match ev.wait_process_or_ready(proc_handle, timeout_ms) {
         ReadyWaitOutcome::Ready => {
             if let Ok(Some(status)) = child.try_wait() {
@@ -285,7 +283,8 @@ pub fn execute_install_pipeline(
     if !sandbox_only {
         export_backup(backup_path, Some(&log))?;
     } else {
-        fs::create_dir_all(root).map_err(|e| format!("Could not create {}: {e}", root.display()))?;
+        fs::create_dir_all(root)
+            .map_err(|e| format!("Could not create {}: {e}", root.display()))?;
     }
 
     report(
