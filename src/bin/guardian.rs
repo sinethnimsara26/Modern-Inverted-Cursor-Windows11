@@ -1,25 +1,27 @@
 #![windows_subsystem = "windows"]
 
 use modern_inverted_cursor::{
-    app_paths, balanced_cursor_size, close_existing_v6_window, create_split_cursor_hicon,
-    current_accessibility_step, ensure_all_assets, is_startup_enabled, load_saved_preset,
-    parse_preset_arg, reg_delete_value, reg_get_string, reg_open_notify, register_and_apply,
-    restore_backup, save_preset, schedule_self_delete, set_startup_enabled, trim_working_set,
-    unregister_uninstall_entry, wide_z, BoundedLogger, Preset, RegCloseKey,
-    RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION,
+    app_paths, app_paths_for_root, balanced_cursor_size, create_split_cursor_hicon,
+    current_accessibility_step, is_startup_enabled, load_saved_preset, parse_preset_arg,
+    perform_validated_restore, reg_delete_value, reg_get_string, reg_open_notify, reg_set_dword,
+    reg_set_string, save_preset, set_startup_enabled, stop_targeted_guardians, trim_working_set,
+    validate_cli_args, wide_z, AssetVerifyCache, BoundedLogger, NamedReadyEvent, Preset,
+    RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION,
     CONFIG_SUBKEY, CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
-    TRAY_WND_CLASS,
+    SETUP_EXE_NAME, TRAY_WND_CLASS,
 };
 
 use std::{
     env,
     ffi::c_void,
-    fs,
     path::{Path, PathBuf},
+    process::Command,
     ptr::{null, null_mut},
 };
 
 const MUTEX_NAME: &str = "Local\\ModernInvertedCursorGuardian_V6_Mutex";
+const SANDBOX_MUTEX_NAME: &str = "Local\\ModernInvertedCursorGuardian_Sandbox_Mutex";
+const SANDBOX_WND_CLASS: &str = "ModernInvertedCursorGuardianSandboxWnd";
 const TRAY_ICON_ID: u32 = 1;
 
 const WM_DESTROY: u32 = 0x0002;
@@ -94,9 +96,10 @@ const CMD_PRESET_NO_TAIL: usize = 1011;
 const CMD_PRESET_DETACHED: usize = 1012;
 const CMD_PRESET_COMPACT: usize = 1013;
 const CMD_STARTUP: usize = 1020;
-const CMD_OPEN_FOLDER: usize = 1021;
-const CMD_VIEW_LOG: usize = 1022;
-const CMD_RESTORE: usize = 1023;
+const CMD_OPEN_SETUP: usize = 1021;
+const CMD_OPEN_FOLDER: usize = 1022;
+const CMD_VIEW_LOG: usize = 1023;
+const CMD_RESTORE: usize = 1024;
 const CMD_EXIT: usize = 1099;
 
 const REG_NOTIFY_CHANGE_LAST_SET: u32 = 0x0000_0004;
@@ -158,9 +161,7 @@ struct NotifyIconDataW {
 extern "system" {
     fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
     fn GetLastError() -> u32;
-    fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
-    fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
     fn CreateMutexW(
         lp_mutex_attributes: *mut c_void,
         b_initial_owner: i32,
@@ -283,33 +284,32 @@ extern "system" {
     ) -> isize;
 }
 
-unsafe fn wts_session_notify(hwnd: *mut c_void, register: bool) {
+unsafe fn wts_session_notify(hwnd: *mut c_void, register: bool) -> bool {
     let lib_name = wide_z("wtsapi32.dll");
     if register {
-        let module = LoadLibraryW(lib_name.as_ptr());
+        let module = modern_inverted_cursor::load_system_dll("wtsapi32.dll");
         if module.is_null() {
-            return;
+            return false;
         }
         type RegisterFn = unsafe extern "system" fn(*mut c_void, u32) -> i32;
         let proc = GetProcAddress(module, b"WTSRegisterSessionNotification\0".as_ptr());
         if !proc.is_null() {
             let f: RegisterFn = std::mem::transmute(proc);
-            let _ = f(hwnd, NOTIFY_FOR_THIS_SESSION);
-        } else {
-            FreeLibrary(module);
+            return f(hwnd, NOTIFY_FOR_THIS_SESSION) != 0;
         }
+        false
     } else {
         let module = GetModuleHandleW(lib_name.as_ptr());
         if module.is_null() {
-            return;
+            return false;
         }
         type UnregisterFn = unsafe extern "system" fn(*mut c_void) -> i32;
         let proc = GetProcAddress(module, b"WTSUnRegisterSessionNotification\0".as_ptr());
         if !proc.is_null() {
             let f: UnregisterFn = std::mem::transmute(proc);
-            let _ = f(hwnd);
+            return f(hwnd) != 0;
         }
-        FreeLibrary(module);
+        false
     }
 }
 
@@ -324,12 +324,15 @@ struct AppState {
     backup_path: PathBuf,
     guardian_exe: PathBuf,
     log: BoundedLogger,
+    asset_cache: AssetVerifyCache,
+    sandbox_mode: bool,
     icon_active: *mut c_void,
     icon_paused: *mut c_void,
     wm_taskbar_created: u32,
     menu_open: bool,
     tray_added: bool,
     tray_retries: u8,
+    last_tray_state: Option<(bool, Preset, u32, u32)>,
 }
 
 impl AppState {
@@ -361,6 +364,10 @@ impl AppState {
         if self.hwnd.is_null() {
             return;
         }
+        let tray_key = (self.paused, self.preset, self.last_px, self.last_step);
+        if prefer_modify && self.tray_added && self.last_tray_state == Some(tray_key) {
+            return;
+        }
         let message = if prefer_modify && self.tray_added {
             NIM_MODIFY
         } else {
@@ -382,6 +389,7 @@ impl AppState {
         if ok {
             self.tray_added = true;
             self.tray_retries = 0;
+            self.last_tray_state = Some(tray_key);
             unsafe {
                 KillTimer(self.hwnd, TIMER_TRAY_RETRY);
             }
@@ -393,19 +401,52 @@ impl AppState {
         }
     }
 
-    fn apply_now(&mut self) {
-        if let Err(err) = ensure_all_assets(&self.install_dir, false, &self.log) {
+    fn apply_now(&mut self, force_full_hash: bool) -> Result<(), String> {
+        if let Err(err) =
+            self.asset_cache
+                .ensure_all_assets_cached(&self.install_dir, force_full_hash, &self.log)
+        {
             self.log.line(format!("[error] Asset check failed: {err}"));
-            return;
+            return Err(err);
         }
-        match register_and_apply(self.preset, &self.install_dir, Some(&self.log)) {
+        if self.sandbox_mode {
+            let step = current_accessibility_step();
+            let px = balanced_cursor_size(step);
+            let (arrow, help, working) = self.preset.custom_files();
+            for req in [arrow, help, working] {
+                if !self.install_dir.join(req).is_file() {
+                    return Err(format!("Sandbox asset missing: {req}"));
+                }
+            }
+            let _ = std::fs::write(
+                self.root.join("sandbox-runtime.txt"),
+                format!(
+                    "pid={}\nversion={APP_VERSION}\npreset={}\nstep={step}\npx={px}\n",
+                    std::process::id(),
+                    self.preset.short_name()
+                ),
+            );
+            self.last_step = step;
+            self.last_px = px;
+            self.sync_tray(true);
+            trim_working_set();
+            return Ok(());
+        }
+        match modern_inverted_cursor::register_and_apply(
+            self.preset,
+            &self.install_dir,
+            Some(&self.log),
+        ) {
             Ok((step, px)) => {
                 self.last_step = step;
                 self.last_px = px;
                 self.sync_tray(true);
+                trim_working_set();
+                Ok(())
             }
             Err(err) => {
                 self.log.line(format!("[error] Apply failed: {err}"));
+                Err(err)
             }
         }
     }
@@ -482,6 +523,12 @@ fn run_popup_menu(
         "Start at Windows Sign-in",
     );
     append_menu_str(hmenu, MF_SEPARATOR, 0, "");
+    append_menu_str(
+        hmenu,
+        MF_STRING,
+        CMD_OPEN_SETUP,
+        "Open Setup & Maintenance...",
+    );
     append_menu_str(hmenu, MF_STRING, CMD_OPEN_FOLDER, "Open Install Folder");
     append_menu_str(hmenu, MF_STRING, CMD_VIEW_LOG, "View Guardian Log");
     append_menu_str(hmenu, MF_STRING, CMD_RESTORE, "Restore Original Cursors...");
@@ -517,6 +564,19 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
     }
 
     if cmd == CMD_RESTORE {
+        let setup_exe = {
+            let state = unsafe { &*ptr };
+            state.root.join(SETUP_EXE_NAME)
+        };
+        if setup_exe.is_file() {
+            if let Err(err) = Command::new(&setup_exe).arg("--uninstall").spawn() {
+                show_error_box(
+                    hwnd,
+                    &format!("Could not launch {}: {err}", setup_exe.display()),
+                );
+            }
+            return;
+        }
         let title = wide_z("Modern Inverted Cursors");
         let msg = wide_z(
             "Restore your original Windows cursors, disable startup launch, and exit the tray guardian?",
@@ -533,10 +593,17 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
             let ptr_after = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut AppState };
             if !ptr_after.is_null() {
                 let state = unsafe { &mut *ptr_after };
-                reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-                reg_delete_value(CONFIG_SUBKEY, "Preset");
-                unregister_uninstall_entry();
-                match restore_backup(&state.backup_path, Some(&state.log)) {
+                let res = perform_validated_restore(
+                    &state.backup_path,
+                    Some(&state.log),
+                    || Ok(0),
+                    || {
+                        reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
+                        reg_delete_value(CONFIG_SUBKEY, "Preset");
+                        Ok(())
+                    },
+                );
+                match res {
                     Ok(()) => unsafe {
                         PostMessageW(hwnd, WM_CLOSE, 0, 0);
                     },
@@ -551,7 +618,7 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
     match cmd {
         CMD_REAPPLY => {
             state.paused = false;
-            state.apply_now();
+            let _ = state.apply_now(true);
         }
         CMD_PAUSE => {
             state.paused = !state.paused;
@@ -561,7 +628,7 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
                 "Guardian resumed by user."
             });
             if !state.paused {
-                state.apply_now();
+                let _ = state.apply_now(false);
             } else {
                 state.sync_tray(true);
             }
@@ -576,13 +643,18 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
             };
             state.preset = next;
             state.paused = false;
-            let _ = save_preset(next);
-            if is_startup_enabled() {
-                let _ = set_startup_enabled(&state.guardian_exe, true);
+            if !state.sandbox_mode {
+                let _ = save_preset(next);
+                if is_startup_enabled() {
+                    let _ = set_startup_enabled(&state.guardian_exe, true);
+                }
             }
-            state.apply_now();
+            let _ = state.apply_now(false);
         }
         CMD_STARTUP => {
+            if state.sandbox_mode {
+                return;
+            }
             let next = !is_startup_enabled();
             if let Err(err) = set_startup_enabled(&state.guardian_exe, next) {
                 show_error_box(hwnd, &err);
@@ -592,6 +664,19 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
                 } else {
                     "Startup at sign-in disabled."
                 });
+            }
+        }
+        CMD_OPEN_SETUP => {
+            let setup_exe = state.root.join(SETUP_EXE_NAME);
+            if setup_exe.is_file() {
+                if let Err(err) = Command::new(&setup_exe).arg("--modify").spawn() {
+                    show_error_box(
+                        hwnd,
+                        &format!("Could not launch {}: {err}", setup_exe.display()),
+                    );
+                }
+            } else {
+                open_shell_path(hwnd, &state.root);
             }
         }
         CMD_OPEN_FOLDER => open_shell_path(hwnd, &state.root),
@@ -652,7 +737,7 @@ unsafe extern "system" fn wnd_proc(
                 } else if ev == WM_LBUTTONDBLCLK {
                     let state = &mut *ptr;
                     state.paused = false;
-                    state.apply_now();
+                    let _ = state.apply_now(true);
                 }
                 return 0;
             }
@@ -680,19 +765,20 @@ unsafe extern "system" fn wnd_proc(
                 if !ptr_after.is_null() {
                     (*ptr_after).menu_open = false;
                 }
+                trim_working_set();
                 return 0;
             }
             WM_APP_REAPPLY => {
                 let state = &mut *ptr;
                 state.paused = false;
-                state.apply_now();
+                let _ = state.apply_now(false);
                 return 0;
             }
             WM_TIMER if w_param == TIMER_REAPPLY => {
                 KillTimer(hwnd, TIMER_REAPPLY);
                 let state = &mut *ptr;
                 if !state.paused {
-                    state.apply_now();
+                    let _ = state.apply_now(false);
                 }
                 return 0;
             }
@@ -718,8 +804,11 @@ unsafe extern "system" fn wnd_proc(
             }
             WM_SETTINGCHANGE | WM_THEMECHANGED => {
                 if !(*ptr).paused {
-                    let arrow_now = reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
-                    if !arrow_now.contains("ModernInvertedCursors") {
+                    let arrow_now =
+                        reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
+                    if !arrow_now.contains("ModernInvertedCursors")
+                        || current_accessibility_step() != (*ptr).last_step
+                    {
                         SetTimer(hwnd, TIMER_REAPPLY, DEBOUNCE_MS, null_mut());
                     }
                 }
@@ -750,91 +839,121 @@ unsafe extern "system" fn wnd_proc(
     DefWindowProcW(hwnd, msg, w_param, l_param)
 }
 
-fn perform_uninstall(
-    root: &Path,
-    install_dir: &Path,
-    backup_path: &Path,
-    log: &BoundedLogger,
-) -> Result<(), String> {
-    let title = wide_z("Uninstall Modern Inverted Cursors");
-    let prompt = wide_z(
-        "Restore your original Windows cursors, disable startup launch, and uninstall Modern Inverted Cursors?",
-    );
-    let ans = unsafe {
-        MessageBoxW(
-            null_mut(),
-            prompt.as_ptr(),
-            title.as_ptr(),
-            MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND,
-        )
-    };
-    if ans != IDYES {
-        return Ok(());
+fn arg_value(args: &[String], flag: &str) -> Option<String> {
+    for i in 0..args.len() {
+        if args[i] == flag {
+            return args.get(i + 1).cloned();
+        }
+        if let Some(v) = args[i].strip_prefix(&format!("{flag}=")) {
+            return Some(v.to_string());
+        }
     }
+    None
+}
 
-    close_existing_v6_window();
-    reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-    reg_delete_value(CONFIG_SUBKEY, "Preset");
-    unregister_uninstall_entry();
-    restore_backup(backup_path, Some(log))?;
-    if install_dir.exists() {
-        let _ = fs::remove_dir_all(install_dir);
+fn sandbox_arg(args: &[String]) -> Option<PathBuf> {
+    if let Some(val) = arg_value(args, "--sandbox") {
+        return Some(PathBuf::from(val));
     }
-    let guardian_exe = root.join(GUARDIAN_EXE_NAME);
-    if guardian_exe.exists() {
-        schedule_self_delete(&guardian_exe);
+    if args.iter().any(|a| a == "--sandbox") {
+        return Some(env::temp_dir().join("mic-guardian-sandbox"));
     }
-    Ok(())
+    None
+}
+
+fn validate_guardian_args(args: &[String]) -> Result<(), String> {
+    validate_cli_args(
+        args,
+        &[
+            "--tray",
+            "--replace",
+            "--quit",
+            "--compact",
+            "--no-tail",
+            "--tail-detached",
+            "--detached",
+            "--regular",
+        ],
+        &["--ready-event", "--preset"],
+        &["--sandbox"],
+    )
 }
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
-    let (root, install_dir, backup_path) = app_paths()?;
+    validate_guardian_args(&args)?;
+    let sandbox_dir = sandbox_arg(&args);
+    let sandbox_mode = sandbox_dir.is_some();
+    let (root, install_dir, backup_path) = match sandbox_dir {
+        Some(dir) => app_paths_for_root(dir),
+        None => app_paths()?,
+    };
     let log = BoundedLogger::new(root.join("guardian.log"), false);
+    let mutex_name = if sandbox_mode {
+        SANDBOX_MUTEX_NAME
+    } else {
+        MUTEX_NAME
+    };
+    let wnd_class = if sandbox_mode {
+        SANDBOX_WND_CLASS
+    } else {
+        TRAY_WND_CLASS
+    };
 
     if args.iter().any(|a| a == "--quit") {
-        close_existing_v6_window();
+        if sandbox_mode {
+            let w_cls = wide_z(SANDBOX_WND_CLASS);
+            let existing = unsafe { FindWindowW(w_cls.as_ptr(), null()) };
+            if !existing.is_null() {
+                unsafe {
+                    PostMessageW(existing, WM_CLOSE, 0, 0);
+                }
+            }
+            return Ok(());
+        }
+        stop_targeted_guardians(&root, Some(&log))?;
         return Ok(());
     }
 
-    if args.iter().any(|a| a == "--uninstall") {
-        return perform_uninstall(&root, &install_dir, &backup_path, &log);
+    if args.iter().any(|a| a == "--replace") && !sandbox_mode {
+        stop_targeted_guardians(&root, Some(&log))?;
     }
 
-    if args.iter().any(|a| a == "--restore") {
-        close_existing_v6_window();
-        reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-        reg_delete_value(CONFIG_SUBKEY, "Preset");
-        unregister_uninstall_entry();
-        return restore_backup(&backup_path, Some(&log));
-    }
+    let ready_event = arg_value(&args, "--ready-event");
 
-    if args.iter().any(|a| a == "--replace") {
-        close_existing_v6_window();
-    }
-
-    let w_mutex = wide_z(MUTEX_NAME);
+    let w_mutex = wide_z(mutex_name);
     let mutex = unsafe { CreateMutexW(null_mut(), 0, w_mutex.as_ptr()) };
     if !mutex.is_null() && unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        let w_cls = wide_z(TRAY_WND_CLASS);
+        unsafe {
+            CloseHandle(mutex);
+        }
+        if ready_event.is_some() {
+            return Err("Another guardian instance remained active and blocked startup.".into());
+        }
+        let w_cls = wide_z(wnd_class);
         let existing = unsafe { FindWindowW(w_cls.as_ptr(), null()) };
         if !existing.is_null() {
             unsafe {
                 PostMessageW(existing, WM_APP_REAPPLY, 0, 0);
             }
         }
-        unsafe {
-            CloseHandle(mutex);
-        }
         return Ok(());
     }
 
     let preset = match parse_preset_arg(&args)? {
         Some(p) => {
-            let _ = save_preset(p);
+            if !sandbox_mode {
+                let _ = save_preset(p);
+            }
             p
         }
-        None => load_saved_preset(),
+        None => {
+            if sandbox_mode {
+                Preset::Compact
+            } else {
+                load_saved_preset()
+            }
+        }
     };
 
     let current_exe = env::current_exe().unwrap_or_else(|_| root.join(GUARDIAN_EXE_NAME));
@@ -852,7 +971,7 @@ fn run() -> Result<(), String> {
     }
 
     let h_inst = unsafe { GetModuleHandleW(null()) };
-    let w_cls = wide_z(TRAY_WND_CLASS);
+    let w_cls = wide_z(wnd_class);
     let wc = WndClassExW {
         cb_size: std::mem::size_of::<WndClassExW>() as u32,
         style: 0,
@@ -914,24 +1033,53 @@ fn run() -> Result<(), String> {
         backup_path,
         guardian_exe: current_exe,
         log,
+        asset_cache: AssetVerifyCache::new(),
+        sandbox_mode,
         icon_active: create_split_cursor_hicon(32, Preset::Regular, false),
         icon_paused: create_split_cursor_hicon(32, Preset::Regular, true),
         wm_taskbar_created,
         menu_open: false,
         tray_added: false,
         tray_retries: 0,
+        last_tray_state: None,
     }));
 
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
-        wts_session_notify(hwnd, true);
+        let _wts_registered = wts_session_notify(hwnd, true);
         (*state_ptr).log.line(format!(
-            "Guardian v{APP_VERSION} started in tray mode (preset={}, size={}px).",
+            "Guardian v{APP_VERSION} started in {} mode (preset={}, size={}px).",
+            if sandbox_mode { "sandbox" } else { "tray" },
             (*state_ptr).preset.short_name(),
             (*state_ptr).last_px
         ));
         (*state_ptr).sync_tray(false);
-        (*state_ptr).apply_now();
+        let init_res = (*state_ptr).apply_now(true);
+        if let Err(err) = init_res {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            DestroyWindow(hwnd);
+            let mut state = Box::from_raw(state_ptr);
+            if !state.icon_active.is_null() {
+                DestroyIcon(state.icon_active);
+            }
+            if !state.icon_paused.is_null() {
+                DestroyIcon(state.icon_paused);
+            }
+            let _ = &mut state;
+            CloseHandle(reg_event);
+            RegCloseKey(reg_key);
+            if !mutex.is_null() {
+                CloseHandle(mutex);
+            }
+            return Err(format!("Guardian initial cursor application failed: {err}"));
+        }
+        if !sandbox_mode {
+            let _ = reg_set_string(CONFIG_SUBKEY, Some("RuntimeVersion"), false, APP_VERSION);
+            let _ = reg_set_dword(CONFIG_SUBKEY, "RuntimePid", std::process::id());
+        }
+        if let Some(ev_name) = ready_event.as_deref() {
+            NamedReadyEvent::signal_by_name(ev_name)?;
+        }
     }
 
     let arm_notify = |rk: *mut c_void, ev: *mut c_void| -> i32 {

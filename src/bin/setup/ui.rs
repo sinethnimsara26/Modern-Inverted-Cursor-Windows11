@@ -1,32 +1,25 @@
-#![windows_subsystem = "windows"]
-
+use crate::install::{start_install_worker, GUARDIAN_EXE_BYTES};
+use crate::{ControlId, GuiState, HitZone, Screen, WorkerTarget, WorkerUpdate, TIMER_ANIM};
 use modern_inverted_cursor::{
-    app_paths, app_paths_for_root, balanced_cursor_size, current_accessibility_step,
-    draw_cursor_glyph, export_backup, find_tray_window, load_saved_preset, parse_preset_arg,
-    prepare_assets_parallel, reg_delete_value, register_and_apply, register_uninstall_entry,
-    restore_backup, save_preset, set_startup_enabled, stop_any_running_guardian,
-    unregister_uninstall_entry, wide_z, write_guardian_binary, BoundedLogger, Preset,
-    ACCESSIBILITY_STEPS, APP_VERSION, CONFIG_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE,
-    PACK_VERSION, RUN_SUBKEY,
+    balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step, load_system_dll,
+    trim_working_set, wide_z, CursorGlyphSprite, Preset, ACCESSIBILITY_STEPS, APP_VERSION,
+    PACK_VERSION,
 };
-
 use std::{
-    env,
     ffi::c_void,
     fs,
-    io::Write,
     path::{Path, PathBuf},
     ptr::{null, null_mut},
-    sync::{Arc, Mutex},
-    thread,
-    time::Duration,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
-const GUARDIAN_EXE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_guardian.exe"));
 const WND_CLASS: &str = "ModernInvertedDarkSetupWnd";
 
-const LOGICAL_W: i32 = 620;
-const LOGICAL_H: i32 = 540;
+pub const LOGICAL_W: i32 = 620;
+pub const LOGICAL_H: i32 = 540;
 
 const WM_DESTROY: u32 = 0x0002;
 const WM_PAINT: u32 = 0x000F;
@@ -44,13 +37,18 @@ const WM_DPICHANGED: u32 = 0x02E0;
 const WM_APP: u32 = 0x8000;
 const WM_APP_WORKER_UPDATE: u32 = WM_APP + 10;
 
+const VK_TAB: usize = 0x09;
 const VK_RETURN: usize = 0x0D;
+const VK_SHIFT: i32 = 0x10;
 const VK_ESCAPE: usize = 0x1B;
-
-const TIMER_ANIM: usize = 1;
+const VK_SPACE: usize = 0x20;
+const VK_LEFT: usize = 0x25;
+const VK_UP: usize = 0x26;
+const VK_RIGHT: usize = 0x27;
+const VK_DOWN: usize = 0x28;
 const GWLP_USERDATA: i32 = -21;
 
-const WS_OVERLAPPEDWINDOW_FIXED: u32 = 0x00CA_0000; // WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX
+const WS_OVERLAPPEDWINDOW_FIXED: u32 = 0x00CA_0000;
 const WS_VISIBLE: u32 = 0x1000_0000;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOMOVE: u32 = 0x0002;
@@ -76,7 +74,6 @@ const DEFAULT_CHARSET: u32 = 1;
 const FW_NORMAL: i32 = 400;
 const FW_SEMIBOLD: i32 = 600;
 const FW_BOLD: i32 = 700;
-
 const SW_SHOW: i32 = 5;
 
 const MB_YESNO: u32 = 0x0004;
@@ -88,53 +85,53 @@ type WndProc = unsafe extern "system" fn(*mut c_void, u32, usize, isize) -> isiz
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Rect {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
+pub struct Rect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
 }
 
 #[repr(C)]
-struct Point {
-    x: i32,
-    y: i32,
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
 }
 
 #[repr(C)]
-struct Msg {
-    hwnd: *mut c_void,
-    message: u32,
-    w_param: usize,
-    l_param: isize,
-    time: u32,
-    pt: Point,
+pub struct Msg {
+    pub hwnd: *mut c_void,
+    pub message: u32,
+    pub w_param: usize,
+    pub l_param: isize,
+    pub time: u32,
+    pub pt: Point,
 }
 
 #[repr(C)]
-struct PaintStruct {
-    hdc: *mut c_void,
-    f_erase: i32,
-    rc_paint: Rect,
-    f_restore: i32,
-    f_inc_update: i32,
-    rgb_reserved: [u8; 32],
+pub struct PaintStruct {
+    pub hdc: *mut c_void,
+    pub f_erase: i32,
+    pub rc_paint: Rect,
+    pub f_restore: i32,
+    pub f_inc_update: i32,
+    pub rgb_reserved: [u8; 32],
 }
 
 #[repr(C)]
-struct TrackMouseEvent {
-    cb_size: u32,
-    dw_flags: u32,
-    hwnd_track: *mut c_void,
-    dw_hover_time: u32,
+pub struct TrackMouseEvent {
+    pub cb_size: u32,
+    pub dw_flags: u32,
+    pub hwnd_track: *mut c_void,
+    pub dw_hover_time: u32,
 }
 
 #[repr(C)]
-struct MonitorInfo {
-    cb_size: u32,
-    rc_monitor: Rect,
-    rc_work: Rect,
-    dw_flags: u32,
+pub struct MonitorInfo {
+    pub cb_size: u32,
+    pub rc_monitor: Rect,
+    pub rc_work: Rect,
+    pub dw_flags: u32,
 }
 
 #[repr(C)]
@@ -154,25 +151,31 @@ struct WndClassExW {
 }
 
 #[repr(C)]
-struct BitmapInfoHeader {
-    bi_size: u32,
-    bi_width: i32,
-    bi_height: i32,
-    bi_planes: u16,
-    bi_bit_count: u16,
-    bi_compression: u32,
-    bi_size_image: u32,
-    bi_x_pels_per_meter: i32,
-    bi_y_pels_per_meter: i32,
-    bi_clr_used: u32,
-    bi_clr_important: u32,
+pub struct BitmapInfoHeader {
+    pub bi_size: u32,
+    pub bi_width: i32,
+    pub bi_height: i32,
+    pub bi_planes: u16,
+    pub bi_bit_count: u16,
+    pub bi_compression: u32,
+    pub bi_size_image: u32,
+    pub bi_x_pels_per_meter: i32,
+    pub bi_y_pels_per_meter: i32,
+    pub bi_clr_used: u32,
+    pub bi_clr_important: u32,
 }
 
 #[link(name = "kernel32")]
 extern "system" {
     fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
-    fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
+    pub fn CreateMutexW(
+        lp_mutex_attributes: *mut c_void,
+        b_initial_owner: i32,
+        lp_name: *const u16,
+    ) -> *mut c_void;
+    pub fn GetLastError() -> u32;
+    pub fn CloseHandle(h_object: *mut c_void) -> i32;
 }
 
 #[link(name = "user32")]
@@ -197,15 +200,15 @@ extern "system" {
     fn PostQuitMessage(n_exit_code: i32);
     fn PostMessageW(h_wnd: *mut c_void, msg: u32, w_param: usize, l_param: isize) -> i32;
     fn SendMessageW(h_wnd: *mut c_void, msg: u32, w_param: usize, l_param: isize) -> isize;
-    fn GetMessageW(
+    pub fn GetMessageW(
         lp_msg: *mut Msg,
         h_wnd: *mut c_void,
         w_msg_filter_min: u32,
         w_msg_filter_max: u32,
     ) -> i32;
-    fn TranslateMessage(lp_msg: *const Msg) -> i32;
-    fn DispatchMessageW(lp_msg: *const Msg) -> isize;
-    fn InvalidateRect(h_wnd: *mut c_void, lp_rect: *const Rect, b_erase: i32) -> i32;
+    pub fn TranslateMessage(lp_msg: *const Msg) -> i32;
+    pub fn DispatchMessageW(lp_msg: *const Msg) -> isize;
+    pub fn InvalidateRect(h_wnd: *mut c_void, lp_rect: *const Rect, b_erase: i32) -> i32;
     fn BeginPaint(h_wnd: *mut c_void, lp_paint: *mut PaintStruct) -> *mut c_void;
     fn EndPaint(h_wnd: *mut c_void, lp_paint: *const PaintStruct) -> i32;
     fn GetDC(h_wnd: *mut c_void) -> *mut c_void;
@@ -233,7 +236,8 @@ extern "system" {
     fn LoadCursorW(h_instance: *mut c_void, lp_cursor_name: *const u16) -> *mut c_void;
     fn SetCursor(h_cursor: *mut c_void) -> *mut c_void;
     fn TrackMouseEvent(lp_event_track: *mut TrackMouseEvent) -> i32;
-    fn SetTimer(
+    fn GetKeyState(n_virt_key: i32) -> i16;
+    pub fn SetTimer(
         h_wnd: *mut c_void,
         n_id_event: usize,
         u_elapse: u32,
@@ -247,8 +251,10 @@ extern "system" {
         lprc: *mut Rect,
         format: u32,
     ) -> i32;
-    fn DestroyIcon(h_icon: *mut c_void) -> i32;
-    fn MessageBoxW(
+    pub fn DestroyIcon(h_icon: *mut c_void) -> i32;
+    pub fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> *mut c_void;
+    pub fn SetForegroundWindow(h_wnd: *mut c_void) -> i32;
+    pub fn MessageBoxW(
         h_wnd: *mut c_void,
         lp_text: *const u16,
         lp_caption: *const u16,
@@ -329,9 +335,8 @@ extern "system" {
     ) -> isize;
 }
 
-// Dynamic Win7–Win11 DPI + DWM Dark Mode helpers (zero extra .lib requirements)
 unsafe fn enable_per_monitor_dpi_v2() {
-    let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
+    let u32_mod = load_system_dll("user32.dll");
     if !u32_mod.is_null() {
         type SetDpiCtxFn = unsafe extern "system" fn(isize) -> i32;
         let p = GetProcAddress(u32_mod, b"SetProcessDpiAwarenessContext\0".as_ptr());
@@ -342,7 +347,7 @@ unsafe fn enable_per_monitor_dpi_v2() {
             }
         }
     }
-    let shcore = LoadLibraryW(wide_z("shcore.dll").as_ptr());
+    let shcore = load_system_dll("shcore.dll");
     if !shcore.is_null() {
         type SetDpiAwarenessFn = unsafe extern "system" fn(i32) -> i32;
         let p = GetProcAddress(shcore, b"SetProcessDpiAwareness\0".as_ptr());
@@ -365,7 +370,7 @@ unsafe fn enable_per_monitor_dpi_v2() {
 
 unsafe fn window_dpi(hwnd: *mut c_void) -> u32 {
     if !hwnd.is_null() {
-        let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
+        let u32_mod = load_system_dll("user32.dll");
         if !u32_mod.is_null() {
             type GetDpiFn = unsafe extern "system" fn(*mut c_void) -> u32;
             let p = GetProcAddress(u32_mod, b"GetDpiForWindow\0".as_ptr());
@@ -378,7 +383,6 @@ unsafe fn window_dpi(hwnd: *mut c_void) -> u32 {
             }
         }
     }
-    // Windows 7 / 8 / 8.1 fallback via GDI LOGPIXELSX (88)
     let hdc = GetDC(hwnd);
     if !hdc.is_null() {
         let dpi = GetDeviceCaps(hdc, 88);
@@ -391,7 +395,7 @@ unsafe fn window_dpi(hwnd: *mut c_void) -> u32 {
 }
 
 unsafe fn adjust_rect_for_dpi(rc: &mut Rect, style: u32, dpi: u32) {
-    let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
+    let u32_mod = load_system_dll("user32.dll");
     if !u32_mod.is_null() {
         type AdjDpiFn = unsafe extern "system" fn(*mut Rect, u32, i32, u32, u32) -> i32;
         let p = GetProcAddress(u32_mod, b"AdjustWindowRectExForDpi\0".as_ptr());
@@ -406,7 +410,7 @@ unsafe fn adjust_rect_for_dpi(rc: &mut Rect, style: u32, dpi: u32) {
 }
 
 unsafe fn apply_dwm_dark_chrome(hwnd: *mut c_void) -> bool {
-    let dwm = LoadLibraryW(wide_z("dwmapi.dll").as_ptr());
+    let dwm = load_system_dll("dwmapi.dll");
     if dwm.is_null() {
         return false;
     }
@@ -417,14 +421,13 @@ unsafe fn apply_dwm_dark_chrome(hwnd: *mut c_void) -> bool {
     }
     let set_attr: DwmSetAttrFn = std::mem::transmute(proc);
     let dark: i32 = 1;
-    // Try Win10 20H1+/Win11 attribute 20, then Win10 1809–1909 attribute 19 (Win7/8 ignore cleanly).
     let mut r1 = set_attr(hwnd, 20, &dark as *const i32 as *const c_void, 4);
     if r1 != 0 {
         r1 = set_attr(hwnd, 19, &dark as *const i32 as *const c_void, 4);
     }
-    let round: i32 = 2; // DWMWCP_ROUND (Win11)
+    let round: i32 = 2;
     let _ = set_attr(hwnd, 33, &round as *const i32 as *const c_void, 4);
-    let border: u32 = 0x003D_312B; // COLORREF BGR for #2B313D (Win11)
+    let border: u32 = 0x003D_312B;
     let _ = set_attr(hwnd, 34, &border as *const u32 as *const c_void, 4);
     r1 == 0
 }
@@ -444,7 +447,7 @@ fn blend_px(bg: u32, fg: u32, alpha: f32) -> u32 {
     let a = alpha.clamp(0.0, 1.0);
     let inv = 1.0 - a;
     let r = (((fg >> 16) & 0xFF) as f32 * a + ((bg >> 16) & 0xFF) as f32 * inv).round() as u32;
-    let g = (((fg >> 8) & 0xFF) as f32 * a + ((bg >> 8) & 0xFF) as f32 * inv).round() as u32;
+    let g = (((fg >> 8) & 0xFF) as f32 * a + ((bg & 0xFF00) >> 8) as f32 * inv).round() as u32;
     let b = ((fg & 0xFF) as f32 * a + (bg & 0xFF) as f32 * inv).round() as u32;
     0xFF00_0000 | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255)
 }
@@ -457,6 +460,7 @@ fn sdf_round_box(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -
     out_len + in_len - r
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fill_round_rect(
     buf: &mut [u32],
     w: usize,
@@ -493,7 +497,7 @@ fn fill_round_rect(
             }
             let cov = (0.75 - d).clamp(0.0, 1.0);
             let col = if border_px > 0.0 && d > -border_px - 0.5 {
-                let border_mix = ((d + border_px + 0.5) / 1.0).clamp(0.0, 1.0);
+                let border_mix = (d + border_px + 0.5).clamp(0.0, 1.0);
                 blend_px(fill_rgb, border_rgb, border_mix)
             } else {
                 0xFF00_0000 | fill_rgb
@@ -503,7 +507,92 @@ fn fill_round_rect(
     }
 }
 
-fn fill_circle_aa(buf: &mut [u32], w: usize, h: usize, cx: f32, cy: f32, radius: f32, fill: u32, border: Option<(u32, f32)>) {
+#[allow(clippy::too_many_arguments)]
+fn stroke_round_rect(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    x: i32,
+    y: i32,
+    rw: i32,
+    rh: i32,
+    radius: f32,
+    stroke_rgb: u32,
+    stroke_px: f32,
+) {
+    if rw <= 0 || rh <= 0 || stroke_px <= 0.0 {
+        return;
+    }
+    let hw = rw as f32 * 0.5;
+    let hh = rh as f32 * 0.5;
+    let cx = x as f32 + hw;
+    let cy = y as f32 + hh;
+    let r = radius.min(hw).min(hh);
+    let half = stroke_px * 0.5;
+
+    let pad = (half + 2.0).ceil() as i32;
+    let x0 = (x - pad).max(0) as usize;
+    let y0 = (y - pad).max(0) as usize;
+    let x1 = (x + rw + pad).min(w as i32) as usize;
+    let y1 = (y + rh + pad).min(h as i32) as usize;
+
+    for py in y0..y1 {
+        let row = py * w;
+        for px in x0..x1 {
+            let d = sdf_round_box(px as f32 + 0.5, py as f32 + 0.5, cx, cy, hw, hh, r);
+            let ring_dist = d.abs() - half;
+            if ring_dist >= 0.75 {
+                continue;
+            }
+            let cov = (0.75 - ring_dist).clamp(0.0, 1.0);
+            buf[row + px] = blend_px(buf[row + px], stroke_rgb, cov);
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct GlyphSpriteCache {
+    size: i32,
+    sprites: Option<[CursorGlyphSprite; 4]>,
+}
+
+impl GlyphSpriteCache {
+    pub fn clear(&mut self) {
+        self.size = 0;
+        self.sprites = None;
+    }
+
+    fn sprites_for(&mut self, size: i32) -> &[CursorGlyphSprite; 4] {
+        let sz = size.max(1);
+        if self.size != sz || self.sprites.is_none() {
+            let list = [
+                CursorGlyphSprite::rasterize(sz, Preset::ALL[0], false),
+                CursorGlyphSprite::rasterize(sz, Preset::ALL[1], false),
+                CursorGlyphSprite::rasterize(sz, Preset::ALL[2], false),
+                CursorGlyphSprite::rasterize(sz, Preset::ALL[3], false),
+            ];
+            self.size = sz;
+            self.sprites = Some(list);
+        }
+        self.sprites.as_ref().unwrap()
+    }
+}
+
+fn preset_glyph_index(preset: Preset) -> usize {
+    Preset::ALL.iter().position(|&p| p == preset).unwrap_or(0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_circle_aa(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    fill: u32,
+    border: Option<(u32, f32)>,
+) {
     let x0 = (cx - radius - 2.0).floor().max(0.0) as usize;
     let y0 = (cy - radius - 2.0).floor().max(0.0) as usize;
     let x1 = (cx + radius + 2.0).ceil().min(w as f32) as usize;
@@ -533,7 +622,18 @@ fn fill_circle_aa(buf: &mut [u32], w: usize, h: usize, cx: f32, cy: f32, radius:
     }
 }
 
-fn draw_line_aa(buf: &mut [u32], w: usize, h: usize, ax: f32, ay: f32, bx: f32, by: f32, half_thick: f32, col: u32) {
+#[allow(clippy::too_many_arguments)]
+fn draw_line_aa(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+    half_thick: f32,
+    col: u32,
+) {
     let x0 = (ax.min(bx) - half_thick - 2.0).floor().max(0.0) as usize;
     let y0 = (ay.min(by) - half_thick - 2.0).floor().max(0.0) as usize;
     let x1 = (ax.max(bx) + half_thick + 2.0).ceil().min(w as f32) as usize;
@@ -567,61 +667,24 @@ fn fill_hline(buf: &mut [u32], w: usize, h: usize, x0: i32, x1: i32, y: i32, col
         return;
     }
     let row = y as usize * w;
-    let s = x0.max(0) as usize;
-    let e = x1.min(w as i32) as usize;
-    for px in s..e {
+    let s_px = x0.max(0) as usize;
+    let e_px = x1.min(w as i32) as usize;
+    for px in s_px..e_px {
         buf[row + px] = 0xFF00_0000 | col;
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ControlId {
-    PresetCard(usize),
-    ToggleStartup,
-    ToggleUninstall,
-    BtnInstall,
-    BtnRestore,
-    BtnOpenFolder,
-    BtnFinish,
-}
-
-#[derive(Clone)]
-struct HitZone {
-    id: ControlId,
-    rect: Rect,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Screen {
-    Setup,
-    Working,
-    Done,
-}
-
-#[derive(Clone)]
-struct WorkerUpdate {
-    pct: f32,
-    stage: usize, // 0..4 checklist step
-    status: String,
-    finished: bool,
-    is_restore: bool,
-    error: Option<String>,
-    applied_step: u32,
-    applied_px: u32,
-    install_root: PathBuf,
-}
-
-struct FontSet {
-    title: *mut c_void,
-    section: *mut c_void,
-    card_title: *mut c_void,
-    body: *mut c_void,
-    small: *mut c_void,
-    btn: *mut c_void,
+pub struct FontSet {
+    pub title: *mut c_void,
+    pub section: *mut c_void,
+    pub card_title: *mut c_void,
+    pub body: *mut c_void,
+    pub small: *mut c_void,
+    pub btn: *mut c_void,
 }
 
 impl FontSet {
-    unsafe fn create(dpi: u32) -> Self {
+    pub unsafe fn create(dpi: u32) -> Self {
         let make = |dip: i32, weight: i32| -> *mut c_void {
             let face = wide_z("Segoe UI");
             CreateFontW(
@@ -651,7 +714,7 @@ impl FontSet {
         }
     }
 
-    unsafe fn destroy(&mut self) {
+    pub unsafe fn destroy(&mut self) {
         for f in [
             self.title,
             self.section,
@@ -667,12 +730,13 @@ impl FontSet {
     }
 }
 
-struct Backbuffer {
-    hdc: *mut c_void,
-    hbm: *mut c_void,
-    bits: *mut u32,
-    w: usize,
-    h: usize,
+pub struct Backbuffer {
+    pub hdc: *mut c_void,
+    pub hbm: *mut c_void,
+    pub old_bm: *mut c_void,
+    pub bits: *mut u32,
+    pub w: usize,
+    pub h: usize,
 }
 
 impl Backbuffer {
@@ -700,10 +764,11 @@ impl Backbuffer {
             DeleteDC(hdc);
             return None;
         }
-        SelectObject(hdc, hbm);
+        let old_bm = SelectObject(hdc, hbm);
         Some(Self {
             hdc,
             hbm,
+            old_bm,
             bits: raw as *mut u32,
             w,
             h,
@@ -714,7 +779,11 @@ impl Backbuffer {
         std::slice::from_raw_parts_mut(self.bits, self.w * self.h)
     }
 
-    unsafe fn destroy(&mut self) {
+    pub unsafe fn destroy(&mut self) {
+        if !self.hdc.is_null() && !self.old_bm.is_null() {
+            SelectObject(self.hdc, self.old_bm);
+            self.old_bm = null_mut();
+        }
         if !self.hbm.is_null() {
             DeleteObject(self.hbm);
             self.hbm = null_mut();
@@ -726,33 +795,7 @@ impl Backbuffer {
     }
 }
 
-struct GuiState {
-    hwnd: *mut c_void,
-    dpi: u32,
-    screen: Screen,
-    preset: Preset,
-    startup: bool,
-    register_uninstall: bool,
-    has_existing_install: bool,
-    current_step: u32,
-    current_px: u32,
-    hover: Option<ControlId>,
-    pressed: Option<ControlId>,
-    tracking_mouse: bool,
-    hits: Vec<HitZone>,
-    anim_pct: f32,
-    target_pct: f32,
-    worker_stage: usize,
-    worker_status: String,
-    worker_error: Option<String>,
-    is_restore: bool,
-    install_root: PathBuf,
-    shared_update: Arc<Mutex<WorkerUpdate>>,
-    fonts: FontSet,
-    backbuffer: Option<Backbuffer>,
-    app_icon: *mut c_void,
-}
-
+#[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
     hdc: *mut c_void,
     font: *mut c_void,
@@ -783,6 +826,7 @@ unsafe fn draw_text(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_toggle_switch(
     buf: &mut [u32],
     bw: usize,
@@ -819,7 +863,7 @@ fn draw_toggle_switch(
     fill_circle_aa(buf, bw, bh, kx, ky, knob_r, 0xF8FAFC, None);
 }
 
-fn render_ui(state: &mut GuiState) {
+pub fn render_ui(state: &mut GuiState) {
     let dpi = state.dpi;
     let cw = s(LOGICAL_W, dpi) as usize;
     let ch = s(LOGICAL_H, dpi) as usize;
@@ -841,18 +885,23 @@ fn render_ui(state: &mut GuiState) {
         }
     }
 
-    let bb = match state.backbuffer.as_mut() {
+    let glyph_sz = s(34, dpi);
+    let _ = state.glyph_cache.sprites_for(glyph_sz);
+    let (sprites, bb_opt, hits) = (
+        state.glyph_cache.sprites.as_ref().unwrap(),
+        state.backbuffer.as_mut(),
+        &mut state.hits,
+    );
+    let bb = match bb_opt {
         Some(b) => b,
         None => return,
     };
-    state.hits.clear();
+    hits.clear();
 
-    // 1. Pixel-level SDF / vector background + cards + icons
     {
         let buf = unsafe { bb.pixels_mut() };
         buf.fill(0xFF0E_1117);
 
-        // Header bar background + hairline divider
         let hdr_h = s(84, dpi);
         for row in 0..(hdr_h as usize).min(ch) {
             let start = row * cw;
@@ -860,7 +909,6 @@ fn render_ui(state: &mut GuiState) {
         }
         fill_hline(buf, cw, ch, 0, cw as i32, hdr_h, 0x232A38);
 
-        // Header icon box + split-contrast vector arrow
         fill_round_rect(
             buf,
             cw,
@@ -874,25 +922,15 @@ fn render_ui(state: &mut GuiState) {
             0x2D374B,
             1.2,
         );
-        draw_cursor_glyph(
-            buf,
-            cw,
-            s(29, dpi),
-            s(25, dpi),
-            s(34, dpi),
-            Preset::Regular,
-            false,
-            false,
-        );
+        sprites[preset_glyph_index(Preset::Regular)].blit_onto(buf, cw, s(29, dpi), s(25, dpi));
 
-        // Version pill
         fill_round_rect(
             buf,
             cw,
             ch,
             s(334, dpi),
             s(21, dpi),
-            s(138, dpi),
+            s(160, dpi),
             s(22, dpi),
             s(11, dpi) as f32,
             0x18253E,
@@ -900,7 +938,6 @@ fn render_ui(state: &mut GuiState) {
             1.0,
         );
 
-        // Footer background
         let ftr_y = s(460, dpi);
         for row in (ftr_y as usize)..ch {
             let start = row * cw;
@@ -910,7 +947,6 @@ fn render_ui(state: &mut GuiState) {
 
         match state.screen {
             Screen::Setup => {
-                // Live pointer size pill
                 fill_round_rect(
                     buf,
                     cw,
@@ -925,7 +961,6 @@ fn render_ui(state: &mut GuiState) {
                     1.0,
                 );
 
-                // 2x2 Preset cards
                 let card_w = s(279, dpi);
                 let card_h = s(88, dpi);
                 let col_x = [s(24, dpi), s(317, dpi)];
@@ -959,7 +994,6 @@ fn render_ui(state: &mut GuiState) {
                         bw,
                     );
 
-                    // Circular preview badge inside card
                     let circle_r = s(23, dpi) as f32;
                     let ccx = cx as f32 + s(36, dpi) as f32;
                     let ccy = cy as f32 + (card_h as f32) * 0.5;
@@ -974,16 +1008,11 @@ fn render_ui(state: &mut GuiState) {
                         Some((if selected { 0x2F5AA8 } else { 0x273041 }, 1.1)),
                     );
 
-                    let glyph_sz = s(34, dpi);
-                    draw_cursor_glyph(
+                    sprites[idx].blit_onto(
                         buf,
                         cw,
                         ccx as i32 - glyph_sz / 2,
                         ccy as i32 - glyph_sz / 2,
-                        glyph_sz,
-                        *preset,
-                        false,
-                        false,
                     );
 
                     if *preset == Preset::Compact {
@@ -1001,8 +1030,22 @@ fn render_ui(state: &mut GuiState) {
                             1.0,
                         );
                     }
+                    if state.focus == Some(ControlId::PresetCard(idx)) {
+                        stroke_round_rect(
+                            buf,
+                            cw,
+                            ch,
+                            cx - 2,
+                            cy - 2,
+                            card_w + 4,
+                            card_h + 4,
+                            s(14, dpi) as f32,
+                            0x93C5FD,
+                            2.0,
+                        );
+                    }
 
-                    state.hits.push(HitZone {
+                    hits.push(HitZone {
                         id: ControlId::PresetCard(idx),
                         rect: Rect {
                             left: cx,
@@ -1013,7 +1056,6 @@ fn render_ui(state: &mut GuiState) {
                     });
                 }
 
-                // Options card
                 let opt_y = s(336, dpi);
                 let opt_h = s(108, dpi);
                 fill_round_rect(
@@ -1029,7 +1071,15 @@ fn render_ui(state: &mut GuiState) {
                     0x252D3B,
                     1.1,
                 );
-                fill_hline(buf, cw, ch, s(40, dpi), s(580, dpi), opt_y + s(54, dpi), 0x222937);
+                fill_hline(
+                    buf,
+                    cw,
+                    ch,
+                    s(40, dpi),
+                    s(580, dpi),
+                    opt_y + s(54, dpi),
+                    0x222937,
+                );
 
                 let sw_x = s(538, dpi);
                 let sw_w = s(42, dpi);
@@ -1045,7 +1095,21 @@ fn render_ui(state: &mut GuiState) {
                     state.startup,
                     state.hover == Some(ControlId::ToggleStartup),
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::ToggleStartup) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        sw_x - 3,
+                        opt_y + s(16, dpi) - 3,
+                        sw_w + 6,
+                        sw_h + 6,
+                        sw_h as f32 * 0.5 + 3.0,
+                        0x93C5FD,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::ToggleStartup,
                     rect: Rect {
                         left: s(24, dpi),
@@ -1066,7 +1130,21 @@ fn render_ui(state: &mut GuiState) {
                     state.register_uninstall,
                     state.hover == Some(ControlId::ToggleUninstall),
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::ToggleUninstall) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        sw_x - 3,
+                        opt_y + s(70, dpi) - 3,
+                        sw_w + 6,
+                        sw_h + 6,
+                        sw_h as f32 * 0.5 + 3.0,
+                        0x93C5FD,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::ToggleUninstall,
                     rect: Rect {
                         left: s(24, dpi),
@@ -1076,30 +1154,49 @@ fn render_ui(state: &mut GuiState) {
                     },
                 });
 
-                // Footer buttons
                 if state.has_existing_install {
                     let hov = state.hover == Some(ControlId::BtnRestore);
                     let prs = state.pressed == Some(ControlId::BtnRestore);
-                    let bg = if prs { 0x1A2029 } else if hov { 0x293242 } else { 0x1F2633 };
+                    let bg = if prs {
+                        0x1A2029
+                    } else if hov {
+                        0x293242
+                    } else {
+                        0x1F2633
+                    };
                     fill_round_rect(
                         buf,
                         cw,
                         ch,
-                        s(314, dpi),
+                        s(304, dpi),
                         s(480, dpi),
-                        s(132, dpi),
+                        s(144, dpi),
                         s(40, dpi),
                         s(9, dpi) as f32,
                         bg,
                         0x364154,
                         1.1,
                     );
-                    state.hits.push(HitZone {
+                    if state.focus == Some(ControlId::BtnRestore) {
+                        stroke_round_rect(
+                            buf,
+                            cw,
+                            ch,
+                            s(304, dpi) - 2,
+                            s(480, dpi) - 2,
+                            s(144, dpi) + 4,
+                            s(40, dpi) + 4,
+                            s(11, dpi) as f32,
+                            0x93C5FD,
+                            2.0,
+                        );
+                    }
+                    hits.push(HitZone {
                         id: ControlId::BtnRestore,
                         rect: Rect {
-                            left: s(314, dpi),
+                            left: s(304, dpi),
                             top: s(480, dpi),
-                            right: s(446, dpi),
+                            right: s(448, dpi),
                             bottom: s(520, dpi),
                         },
                     });
@@ -1107,7 +1204,13 @@ fn render_ui(state: &mut GuiState) {
 
                 let hov_i = state.hover == Some(ControlId::BtnInstall);
                 let prs_i = state.pressed == Some(ControlId::BtnInstall);
-                let ibg = if prs_i { 0x1D4ED8 } else if hov_i { 0x3B82F6 } else { 0x2563EB };
+                let ibg = if prs_i {
+                    0x1D4ED8
+                } else if hov_i {
+                    0x3B82F6
+                } else {
+                    0x2563EB
+                };
                 fill_round_rect(
                     buf,
                     cw,
@@ -1121,7 +1224,21 @@ fn render_ui(state: &mut GuiState) {
                     0x60A5FA,
                     1.0,
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::BtnInstall) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        s(458, dpi) - 2,
+                        s(480, dpi) - 2,
+                        s(138, dpi) + 4,
+                        s(40, dpi) + 4,
+                        s(11, dpi) as f32,
+                        0xFFFFFF,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::BtnInstall,
                     rect: Rect {
                         left: s(458, dpi),
@@ -1146,7 +1263,6 @@ fn render_ui(state: &mut GuiState) {
                     1.2,
                 );
 
-                // Progress bar track
                 let bar_x = s(84, dpi);
                 let bar_y = s(222, dpi);
                 let bar_w = s(452, dpi);
@@ -1182,7 +1298,6 @@ fn render_ui(state: &mut GuiState) {
                     );
                 }
 
-                // 4 checklist step indicators
                 let sc = dpi as f32 / 96.0;
                 for i in 0..4usize {
                     let sy = s(276 + i as i32 * 34, dpi) as f32;
@@ -1190,10 +1305,39 @@ fn render_ui(state: &mut GuiState) {
                     let r = s(7, dpi) as f32;
                     if i < state.worker_stage {
                         fill_circle_aa(buf, cw, ch, sx, sy, r, 0x16A34A, Some((0x22C55E, 1.0)));
-                        draw_line_aa(buf, cw, ch, sx - 3.2 * sc, sy, sx - 0.8 * sc, sy + 2.6 * sc, 1.1 * sc, 0xFFFF_FFFF);
-                        draw_line_aa(buf, cw, ch, sx - 0.8 * sc, sy + 2.6 * sc, sx + 3.6 * sc, sy - 2.6 * sc, 1.1 * sc, 0xFFFF_FFFF);
+                        draw_line_aa(
+                            buf,
+                            cw,
+                            ch,
+                            sx - 3.2 * sc,
+                            sy,
+                            sx - 0.8 * sc,
+                            sy + 2.6 * sc,
+                            1.1 * sc,
+                            0xFFFF_FFFF,
+                        );
+                        draw_line_aa(
+                            buf,
+                            cw,
+                            ch,
+                            sx - 0.8 * sc,
+                            sy + 2.6 * sc,
+                            sx + 3.6 * sc,
+                            sy - 2.6 * sc,
+                            1.1 * sc,
+                            0xFFFF_FFFF,
+                        );
                     } else if i == state.worker_stage {
-                        fill_circle_aa(buf, cw, ch, sx, sy, r, 0x1E3A8A, Some((0x60A5FA, 1.3 * sc)));
+                        fill_circle_aa(
+                            buf,
+                            cw,
+                            ch,
+                            sx,
+                            sy,
+                            r,
+                            0x1E3A8A,
+                            Some((0x60A5FA, 1.3 * sc)),
+                        );
                         fill_circle_aa(buf, cw, ch, sx, sy, r * 0.42, 0x93C5FD, None);
                     } else {
                         fill_circle_aa(buf, cw, ch, sx, sy, r, 0x1C222D, Some((0x374151, 1.0)));
@@ -1206,7 +1350,7 @@ fn render_ui(state: &mut GuiState) {
                     cw,
                     ch,
                     s(44, dpi),
-                    s(112, dpi),
+                    s(110, dpi),
                     s(532, dpi),
                     s(322, dpi),
                     s(14, dpi) as f32,
@@ -1221,12 +1365,52 @@ fn render_ui(state: &mut GuiState) {
                 let rad = s(24, dpi) as f32;
                 if state.worker_error.is_some() {
                     fill_circle_aa(buf, cw, ch, cx, cy, rad, 0x3B181E, Some((0xEF4444, 1.6)));
-                    draw_line_aa(buf, cw, ch, cx - 7.5 * sc, cy - 7.5 * sc, cx + 7.5 * sc, cy + 7.5 * sc, 1.8 * sc, 0xFFFF_FFFF);
-                    draw_line_aa(buf, cw, ch, cx + 7.5 * sc, cy - 7.5 * sc, cx - 7.5 * sc, cy + 7.5 * sc, 1.8 * sc, 0xFFFF_FFFF);
+                    draw_line_aa(
+                        buf,
+                        cw,
+                        ch,
+                        cx - 7.5 * sc,
+                        cy - 7.5 * sc,
+                        cx + 7.5 * sc,
+                        cy + 7.5 * sc,
+                        1.8 * sc,
+                        0xFFFF_FFFF,
+                    );
+                    draw_line_aa(
+                        buf,
+                        cw,
+                        ch,
+                        cx + 7.5 * sc,
+                        cy - 7.5 * sc,
+                        cx - 7.5 * sc,
+                        cy + 7.5 * sc,
+                        1.8 * sc,
+                        0xFFFF_FFFF,
+                    );
                 } else {
                     fill_circle_aa(buf, cw, ch, cx, cy, rad, 0x132E22, Some((0x22C55E, 1.6)));
-                    draw_line_aa(buf, cw, ch, cx - 8.5 * sc, cy + 1.0 * sc, cx - 2.0 * sc, cy + 7.5 * sc, 1.8 * sc, 0xFFFF_FFFF);
-                    draw_line_aa(buf, cw, ch, cx - 2.0 * sc, cy + 7.5 * sc, cx + 9.5 * sc, cy - 6.5 * sc, 1.8 * sc, 0xFFFF_FFFF);
+                    draw_line_aa(
+                        buf,
+                        cw,
+                        ch,
+                        cx - 8.5 * sc,
+                        cy + 1.0 * sc,
+                        cx - 2.0 * sc,
+                        cy + 7.5 * sc,
+                        1.8 * sc,
+                        0xFFFF_FFFF,
+                    );
+                    draw_line_aa(
+                        buf,
+                        cw,
+                        ch,
+                        cx - 2.0 * sc,
+                        cy + 7.5 * sc,
+                        cx + 9.5 * sc,
+                        cy - 6.5 * sc,
+                        1.8 * sc,
+                        0xFFFF_FFFF,
+                    );
                 }
 
                 for r_idx in 0..3 {
@@ -1234,7 +1418,6 @@ fn render_ui(state: &mut GuiState) {
                     fill_hline(buf, cw, ch, s(76, dpi), s(544, dpi), div_y, 0x222937);
                 }
 
-                // Open folder secondary button
                 let hov_f = state.hover == Some(ControlId::BtnOpenFolder);
                 let fbg = if hov_f { 0x293242 } else { 0x1F2633 };
                 fill_round_rect(
@@ -1250,7 +1433,21 @@ fn render_ui(state: &mut GuiState) {
                     0x364154,
                     1.1,
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::BtnOpenFolder) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        s(328, dpi) - 2,
+                        s(480, dpi) - 2,
+                        s(128, dpi) + 4,
+                        s(40, dpi) + 4,
+                        s(11, dpi) as f32,
+                        0x93C5FD,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::BtnOpenFolder,
                     rect: Rect {
                         left: s(328, dpi),
@@ -1275,7 +1472,21 @@ fn render_ui(state: &mut GuiState) {
                     0x60A5FA,
                     1.0,
                 );
-                state.hits.push(HitZone {
+                if state.focus == Some(ControlId::BtnFinish) {
+                    stroke_round_rect(
+                        buf,
+                        cw,
+                        ch,
+                        s(468, dpi) - 2,
+                        s(480, dpi) - 2,
+                        s(128, dpi) + 4,
+                        s(40, dpi) + 4,
+                        s(11, dpi) as f32,
+                        0xFFFFFF,
+                        2.0,
+                    );
+                }
+                hits.push(HitZone {
                     id: ControlId::BtnFinish,
                     rect: Rect {
                         left: s(468, dpi),
@@ -1288,7 +1499,6 @@ fn render_ui(state: &mut GuiState) {
         }
     }
 
-    // 2. Crisp ClearType Segoe UI Text via GDI onto the same backbuffer DC
     unsafe {
         let hdc = bb.hdc;
         draw_text(
@@ -1308,7 +1518,7 @@ fn render_ui(state: &mut GuiState) {
             0x7FB3FF,
             s(334, dpi),
             s(21, dpi),
-            s(138, dpi),
+            s(160, dpi),
             s(22, dpi),
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
             &format!("v{APP_VERSION} • Pack {PACK_VERSION}"),
@@ -1322,21 +1532,26 @@ fn render_ui(state: &mut GuiState) {
             s(516, dpi),
             s(22, dpi),
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-            "Dynamic XOR-inverting Windows 11 pointers + silent system-tray guardian",
+            "Dynamic XOR-inverting Windows pointers + silent system-tray guardian",
         );
 
         match state.screen {
             Screen::Setup => {
+                let section_title = if state.is_modify_mode {
+                    "MAINTENANCE — CHOOSE PRESET"
+                } else {
+                    "CHOOSE CURSOR PRESET"
+                };
                 draw_text(
                     hdc,
                     state.fonts.section,
                     0x7D8799,
                     s(24, dpi),
                     s(98, dpi),
-                    s(220, dpi),
+                    s(240, dpi),
                     s(20, dpi),
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-                    "CHOOSE CURSOR PRESET",
+                    section_title,
                 );
                 draw_text(
                     hdc,
@@ -1348,7 +1563,7 @@ fn render_ui(state: &mut GuiState) {
                     s(24, dpi),
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE,
                     &format!(
-                        "Pointer Size: {}/{ACCESSIBILITY_STEPS} → {} px (Balanced)",
+                        "Pointer Size: {}/{ACCESSIBILITY_STEPS} -> {} px (Balanced)",
                         state.current_step, state.current_px
                     ),
                 );
@@ -1417,7 +1632,7 @@ fn render_ui(state: &mut GuiState) {
                     s(460, dpi),
                     s(18, dpi),
                     DT_LEFT | DT_SINGLELINE,
-                    "Runs invisibly (~0.5 MB RAM, 0% idle CPU) with no terminal window",
+                    "Runs silently (~1-2 MB RAM, negligible idle CPU) with no terminal window",
                 );
                 draw_text(
                     hdc,
@@ -1439,7 +1654,7 @@ fn render_ui(state: &mut GuiState) {
                     s(460, dpi),
                     s(18, dpi),
                     DT_LEFT | DT_SINGLELINE,
-                    "Allows one-click uninstall & cursor restoration from Windows Settings",
+                    "Enables Modify, Repair & Uninstall from Windows Settings",
                 );
 
                 draw_text(
@@ -1448,10 +1663,13 @@ fn render_ui(state: &mut GuiState) {
                     0x7D8799,
                     s(24, dpi),
                     s(488, dpi),
-                    s(280, dpi),
+                    s(270, dpi),
                     s(24, dpi),
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-                    &format!("Pure Rust • Safe backup • {} KB guardian", GUARDIAN_EXE_BYTES.len() / 1024),
+                    &format!(
+                        "Pure Rust • Safe backup • {} KB guardian",
+                        GUARDIAN_EXE_BYTES.len() / 1024
+                    ),
                 );
 
                 if state.has_existing_install {
@@ -1459,12 +1677,12 @@ fn render_ui(state: &mut GuiState) {
                         hdc,
                         state.fonts.btn,
                         0xD6DEE9,
-                        s(314, dpi),
+                        s(304, dpi),
                         s(480, dpi),
-                        s(132, dpi),
+                        s(144, dpi),
                         s(40, dpi),
                         DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-                        "Restore Original",
+                        "Restore & Uninstall",
                     );
                 }
 
@@ -1526,12 +1744,12 @@ fn render_ui(state: &mut GuiState) {
                 );
 
                 let guardian_kb = GUARDIAN_EXE_BYTES.len() / 1024;
-                let step3_label = format!("Install silent {guardian_kb} KB tray guardian & Windows integration");
+                let step3_label = format!("Install Setup & {guardian_kb} KB tray guardian");
                 let steps = if state.is_restore {
                     [
-                        "Stop background tray guardian cleanly",
-                        "Remove startup & Installed Apps entries",
-                        "Restore original backup-original.reg scheme",
+                        "Validate original backup-original.reg scheme",
+                        "Stop tray guardian & restore backup",
+                        "Clean startup & Installed Apps entries",
                         "Reload native Windows cursor handles",
                     ]
                 } else {
@@ -1539,7 +1757,7 @@ fn render_ui(state: &mut GuiState) {
                         "Back up pre-existing Windows cursor scheme",
                         "Download & SHA-1 verify 32 upstream v3.6.2 assets",
                         step3_label.as_str(),
-                        "Apply live balanced cursors & start tray icon",
+                        "Verify tray guardian startup & initial cursor apply",
                     ]
                 };
                 for (i, label) in steps.iter().enumerate() {
@@ -1576,8 +1794,7 @@ fn render_ui(state: &mut GuiState) {
                 );
             }
             Screen::Done => {
-                let heading = if let Some(ref err) = state.worker_error {
-                    let _ = err;
+                let heading = if state.worker_error.is_some() {
                     "Setup Encountered an Error"
                 } else if state.is_restore {
                     "Original Windows Cursors Restored"
@@ -1632,7 +1849,7 @@ fn render_ui(state: &mut GuiState) {
                         ),
                         (
                             "Background Guardian",
-                            "Running silently in Show hidden icons".to_string(),
+                            "Verified active in Show hidden icons".to_string(),
                         ),
                         (
                             "Install Folder",
@@ -1706,7 +1923,7 @@ fn render_ui(state: &mut GuiState) {
     }
 }
 
-fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
+pub fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
     let w = bb.w as u32;
     let h = bb.h as u32;
     let row_bytes = (w * 3) as usize;
@@ -1732,6 +1949,7 @@ fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
     bmp.extend_from_slice(&0u32.to_le_bytes());
 
     let pixels = unsafe { std::slice::from_raw_parts(bb.bits, (w * h) as usize) };
+    let pad_zeros = [0u8; 3];
     for y in (0..h as usize).rev() {
         let row = &pixels[y * w as usize..(y + 1) * w as usize];
         for &px in row {
@@ -1739,8 +1957,8 @@ fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
             bmp.push(((px >> 8) & 0xFF) as u8);
             bmp.push(((px >> 16) & 0xFF) as u8);
         }
-        for _ in 0..pad {
-            bmp.push(0);
+        if pad > 0 {
+            bmp.extend_from_slice(&pad_zeros[..pad]);
         }
     }
 
@@ -1750,255 +1968,25 @@ fn save_backbuffer_bmp(bb: &Backbuffer, out_path: &Path) -> Result<(), String> {
     fs::write(out_path, &bmp).map_err(|e| format!("write bmp failed: {e}"))
 }
 
-fn push_worker_update(hwnd_raw: usize, shared: &Arc<Mutex<WorkerUpdate>>, u: WorkerUpdate) {
+pub fn push_worker_update(
+    target: Option<&Arc<WorkerTarget>>,
+    shared: &Arc<Mutex<WorkerUpdate>>,
+    u: WorkerUpdate,
+) {
     if let Ok(mut guard) = shared.lock() {
         *guard = u;
     }
-    if hwnd_raw != 0 {
-        unsafe {
-            PostMessageW(hwnd_raw as *mut c_void, WM_APP_WORKER_UPDATE, 0, 0);
-        }
-    }
-}
-
-fn execute_install_pipeline(
-    root: &Path,
-    install_dir: &Path,
-    backup_path: &Path,
-    preset: Preset,
-    startup: bool,
-    register_uninstall: bool,
-    sandbox_only: bool,
-    hwnd_raw: usize,
-    shared: Option<&Arc<Mutex<WorkerUpdate>>>,
-) -> Result<(u32, u32), String> {
-    let log = BoundedLogger::new(root.join("guardian.log"), false);
-    let report = |pct: f32, stage: usize, msg: String| {
-        if let Some(sh) = shared {
-            push_worker_update(
-                hwnd_raw,
-                sh,
-                WorkerUpdate {
-                    pct,
-                    stage,
-                    status: msg,
-                    finished: false,
-                    is_restore: false,
-                    error: None,
-                    applied_step: 1,
-                    applied_px: 32,
-                    install_root: root.to_path_buf(),
-                },
-            );
-        }
-    };
-
-    report(0.08, 0, "Backing up pre-existing Windows cursor scheme...".into());
-    if !sandbox_only {
-        export_backup(backup_path, Some(&log))?;
-    } else {
-        fs::create_dir_all(root).map_err(|e| format!("Could not create {}: {e}", root.display()))?;
-    }
-
-    report(0.18, 1, "Preparing 32 upstream v3.6.2 cursor files...".into());
-    prepare_assets_parallel(install_dir, Some(&log), |done, total, name| {
-        let pct = 0.18 + 0.52 * (done as f32 / total as f32);
-        report(
-            pct,
-            1,
-            format!("Verified {done}/{total} cursor assets ({name})"),
-        );
-    })?;
-
-    report(0.76, 2, "Installing ultra-lightweight tray guardian...".into());
-    let guardian_exe = root.join(GUARDIAN_EXE_NAME);
-    if !sandbox_only {
-        stop_any_running_guardian();
-    }
-    write_guardian_binary(&guardian_exe, GUARDIAN_EXE_BYTES)?;
-
-    if !sandbox_only {
-        save_preset(preset)?;
-        set_startup_enabled(&guardian_exe, startup)?;
-        if register_uninstall {
-            register_uninstall_entry(root, &guardian_exe)?;
-        } else {
-            unregister_uninstall_entry();
-        }
-    }
-
-    report(
-        0.90,
-        3,
-        "Applying balanced cursors & starting tray guardian...".into(),
-    );
-    let (step, px) = if sandbox_only {
-        let st = current_accessibility_step();
-        (st, balanced_cursor_size(st))
-    } else {
-        std::process::Command::new(&guardian_exe)
-            .args(["--tray", "--preset", preset.cli_name()])
-            .spawn()
-            .map_err(|e| format!("Could not launch tray guardian: {e}"))?;
-
-        for _ in 0..40 {
-            thread::sleep(Duration::from_millis(50));
-            if !find_tray_window().is_null() {
-                break;
-            }
-        }
-        let st = current_accessibility_step();
-        (st, balanced_cursor_size(st))
-    };
-
-    log.line(format!(
-        "Setup v{APP_VERSION} installed {} ({}px, sandbox={sandbox_only})",
-        preset.short_name(),
-        px
-    ));
-    Ok((step, px))
-}
-
-fn start_install_worker(state: &mut GuiState, is_restore: bool) {
-    state.screen = Screen::Working;
-    state.is_restore = is_restore;
-    state.anim_pct = 0.04;
-    state.target_pct = 0.08;
-    state.worker_stage = 0;
-    state.worker_error = None;
-    state.worker_status = if is_restore {
-        "Closing tray guardian...".into()
-    } else {
-        "Initializing installer...".into()
-    };
-
-    let hwnd = state.hwnd as usize;
-    let shared = Arc::clone(&state.shared_update);
-    let preset = state.preset;
-    let startup = state.startup;
-    let reg_un = state.register_uninstall;
-
-    unsafe {
-        SetTimer(state.hwnd, TIMER_ANIM, 30, null_mut());
-        InvalidateRect(state.hwnd, null(), 0);
-    }
-
-    thread::spawn(move || {
-        let hwnd_raw = hwnd;
-        let paths = app_paths();
-        let res = match paths {
-            Ok((root, install_dir, backup_path)) => {
-                if is_restore {
-                    let log = BoundedLogger::new(root.join("guardian.log"), false);
-                    push_worker_update(
-                        hwnd_raw,
-                        &shared,
-                        WorkerUpdate {
-                            pct: 0.25,
-                            stage: 0,
-                            status: "Stopping background tray guardian...".into(),
-                            finished: false,
-                            is_restore: true,
-                            error: None,
-                            applied_step: 1,
-                            applied_px: 32,
-                            install_root: root.clone(),
-                        },
-                    );
-                    stop_any_running_guardian();
-                    push_worker_update(
-                        hwnd_raw,
-                        &shared,
-                        WorkerUpdate {
-                            pct: 0.55,
-                            stage: 1,
-                            status: "Cleaning startup & Installed Apps entries...".into(),
-                            finished: false,
-                            is_restore: true,
-                            error: None,
-                            applied_step: 1,
-                            applied_px: 32,
-                            install_root: root.clone(),
-                        },
-                    );
-                    reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-                    reg_delete_value(CONFIG_SUBKEY, "Preset");
-                    unregister_uninstall_entry();
-                    let gexe = root.join(GUARDIAN_EXE_NAME);
-                    if gexe.exists() {
-                        let _ = fs::remove_file(&gexe);
-                    }
-                    push_worker_update(
-                        hwnd_raw,
-                        &shared,
-                        WorkerUpdate {
-                            pct: 0.85,
-                            stage: 2,
-                            status: "Restoring original Windows cursor scheme...".into(),
-                            finished: false,
-                            is_restore: true,
-                            error: None,
-                            applied_step: 1,
-                            applied_px: 32,
-                            install_root: root.clone(),
-                        },
-                    );
-                    restore_backup(&backup_path, Some(&log)).map(|()| (root, 1u32, 32u32))
-                } else {
-                    execute_install_pipeline(
-                        &root,
-                        &install_dir,
-                        &backup_path,
-                        preset,
-                        startup,
-                        reg_un,
-                        false,
-                        hwnd_raw,
-                        Some(&shared),
-                    )
-                    .map(|(st, px)| (root, st, px))
+    if let Some(t) = target {
+        if t.alive.load(Ordering::Acquire) {
+            let hwnd = t.hwnd.load(Ordering::Acquire);
+            if hwnd != 0 {
+                // SAFETY: `t.alive` is cleared in `WM_DESTROY` before `hwnd` becomes invalid.
+                unsafe {
+                    PostMessageW(hwnd as *mut c_void, WM_APP_WORKER_UPDATE, 0, 0);
                 }
             }
-            Err(e) => Err(e),
-        };
-
-        match res {
-            Ok((root, st, px)) => {
-                push_worker_update(
-                    hwnd_raw,
-                    &shared,
-                    WorkerUpdate {
-                        pct: 1.0,
-                        stage: 4,
-                        status: "Complete!".into(),
-                        finished: true,
-                        is_restore,
-                        error: None,
-                        applied_step: st,
-                        applied_px: px,
-                        install_root: root,
-                    },
-                );
-            }
-            Err(err) => {
-                push_worker_update(
-                    hwnd_raw,
-                    &shared,
-                    WorkerUpdate {
-                        pct: 1.0,
-                        stage: 4,
-                        status: "Failed".into(),
-                        finished: true,
-                        is_restore,
-                        error: Some(err),
-                        applied_step: 1,
-                        applied_px: 32,
-                        install_root: PathBuf::new(),
-                    },
-                );
-            }
         }
-    });
+    }
 }
 
 fn hit_test(hits: &[HitZone], x: i32, y: i32) -> Option<ControlId> {
@@ -2010,6 +1998,84 @@ fn hit_test(hits: &[HitZone], x: i32, y: i32) -> Option<ControlId> {
     None
 }
 
+pub fn focus_order(
+    screen: Screen,
+    has_existing: bool,
+    _worker_error: bool,
+    _is_restore: bool,
+) -> Vec<ControlId> {
+    match screen {
+        Screen::Setup => {
+            let mut order = vec![
+                ControlId::PresetCard(0),
+                ControlId::PresetCard(1),
+                ControlId::PresetCard(2),
+                ControlId::PresetCard(3),
+                ControlId::ToggleStartup,
+                ControlId::ToggleUninstall,
+            ];
+            if has_existing {
+                order.push(ControlId::BtnRestore);
+            }
+            order.push(ControlId::BtnInstall);
+            order
+        }
+        Screen::Working => Vec::new(),
+        Screen::Done => vec![ControlId::BtnOpenFolder, ControlId::BtnFinish],
+    }
+}
+
+unsafe fn activate_control(hwnd: *mut c_void, ptr: *mut GuiState, ctrl: ControlId) -> bool {
+    let state = &mut *ptr;
+    match ctrl {
+        ControlId::PresetCard(i) => {
+            if let Some(p) = Preset::ALL.get(i) {
+                state.preset = *p;
+                state.dirty = true;
+            }
+        }
+        ControlId::ToggleStartup => {
+            state.startup = !state.startup;
+            state.dirty = true;
+        }
+        ControlId::ToggleUninstall => {
+            state.register_uninstall = !state.register_uninstall;
+            state.dirty = true;
+        }
+        ControlId::BtnInstall => {
+            start_install_worker(state, false);
+            return true;
+        }
+        ControlId::BtnRestore => {
+            let title = wide_z("Restore & Uninstall Modern Inverted Cursors");
+            let text = wide_z(
+                "Validate your original cursor backup, restore Windows cursors, remove startup launch, and uninstall?",
+            );
+            let ans = MessageBoxW(
+                hwnd,
+                text.as_ptr(),
+                title.as_ptr(),
+                MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND,
+            );
+            if ans == IDYES {
+                start_install_worker(&mut *ptr, true);
+            }
+            return true;
+        }
+        ControlId::BtnOpenFolder => {
+            let dir = state.install_root.clone();
+            let op = wide_z("open");
+            let target = wide_z(&dir.to_string_lossy());
+            ShellExecuteW(hwnd, op.as_ptr(), target.as_ptr(), null(), null(), SW_SHOW);
+        }
+        ControlId::BtnFinish => {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            return true;
+        }
+    }
+    false
+}
+
 unsafe extern "system" fn wnd_proc(
     hwnd: *mut c_void,
     msg: u32,
@@ -2017,6 +2083,12 @@ unsafe extern "system" fn wnd_proc(
     l_param: isize,
 ) -> isize {
     if msg == WM_DESTROY {
+        let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GuiState;
+        if !p.is_null() {
+            let state = &*p;
+            state.worker_target.alive.store(false, Ordering::Release);
+            state.worker_target.hwnd.store(0, Ordering::Release);
+        }
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         PostQuitMessage(0);
         return 0;
@@ -2033,26 +2105,27 @@ unsafe extern "system" fn wnd_proc(
             let state = &mut *ptr;
             let mut ps: PaintStruct = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
-            render_ui(state);
+            if state.dirty || state.backbuffer.is_none() {
+                render_ui(state);
+                state.dirty = false;
+            }
             if let Some(bb) = state.backbuffer.as_ref() {
-                BitBlt(
-                    hdc,
-                    0,
-                    0,
-                    bb.w as i32,
-                    bb.h as i32,
-                    bb.hdc,
-                    0,
-                    0,
-                    SRCCOPY,
-                );
+                BitBlt(hdc, 0, 0, bb.w as i32, bb.h as i32, bb.hdc, 0, 0, SRCCOPY);
             }
             EndPaint(hwnd, &ps);
+            if !state.trimmed_initial {
+                state.trimmed_initial = true;
+                trim_working_set();
+            }
             return 0;
         }
         WM_SETCURSOR => {
             if (l_param as u32 & 0xFFFF) == 1 {
-                let id = if (*ptr).hover.is_some() { IDC_HAND } else { IDC_ARROW };
+                let id = if (*ptr).hover.is_some() {
+                    IDC_HAND
+                } else {
+                    IDC_ARROW
+                };
                 SetCursor(LoadCursorW(null_mut(), id as *const u16));
                 return 1;
             }
@@ -2069,13 +2142,12 @@ unsafe extern "system" fn wnd_proc(
                 TrackMouseEvent(&mut tme);
                 state.tracking_mouse = true;
             }
-            let x = (l_param as i32) & 0xFFFF;
-            let y = ((l_param as i32) >> 16) & 0xFFFF;
-            let x = (x as i16) as i32;
-            let y = (y as i16) as i32;
+            let x = ((l_param as i32 & 0xFFFF) as i16) as i32;
+            let y = (((l_param as i32 >> 16) & 0xFFFF) as i16) as i32;
             let next_hover = hit_test(&state.hits, x, y);
             if next_hover != state.hover {
                 state.hover = next_hover;
+                state.dirty = true;
                 InvalidateRect(hwnd, null(), 0);
             }
             return 0;
@@ -2086,6 +2158,7 @@ unsafe extern "system" fn wnd_proc(
             if state.hover.is_some() || state.pressed.is_some() {
                 state.hover = None;
                 state.pressed = None;
+                state.dirty = true;
                 InvalidateRect(hwnd, null(), 0);
             }
             return 0;
@@ -2094,8 +2167,13 @@ unsafe extern "system" fn wnd_proc(
             let state = &mut *ptr;
             let x = ((l_param as i32 & 0xFFFF) as i16) as i32;
             let y = (((l_param as i32 >> 16) & 0xFFFF) as i16) as i32;
-            state.pressed = hit_test(&state.hits, x, y);
-            InvalidateRect(hwnd, null(), 0);
+            let hit = hit_test(&state.hits, x, y);
+            if state.pressed != hit || state.focus.is_some() {
+                state.pressed = hit;
+                state.focus = None;
+                state.dirty = true;
+                InvalidateRect(hwnd, null(), 0);
+            }
             return 0;
         }
         WM_LBUTTONUP => {
@@ -2105,55 +2183,20 @@ unsafe extern "system" fn wnd_proc(
                 let state = &mut *ptr;
                 let h = hit_test(&state.hits, x, y);
                 let match_click = if h == state.pressed { h } else { None };
-                state.pressed = None;
+                if state.pressed.is_some() {
+                    state.pressed = None;
+                    state.dirty = true;
+                }
                 match_click
             };
             if let Some(ctrl) = clicked {
-                match ctrl {
-                    ControlId::PresetCard(i) => {
-                        if let Some(p) = Preset::ALL.get(i) {
-                            (*ptr).preset = *p;
-                        }
-                    }
-                    ControlId::ToggleStartup => {
-                        (*ptr).startup = !(*ptr).startup;
-                    }
-                    ControlId::ToggleUninstall => {
-                        (*ptr).register_uninstall = !(*ptr).register_uninstall;
-                    }
-                    ControlId::BtnInstall => {
-                        start_install_worker(&mut *ptr, false);
-                        return 0;
-                    }
-                    ControlId::BtnRestore => {
-                        let title = wide_z("Restore Original Cursors");
-                        let text = wide_z(
-                            "Restore your original Windows cursor backup and remove the startup tray guardian?",
-                        );
-                        let ans = MessageBoxW(
-                            hwnd,
-                            text.as_ptr(),
-                            title.as_ptr(),
-                            MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND,
-                        );
-                        if ans == IDYES {
-                            start_install_worker(&mut *ptr, true);
-                        }
-                        return 0;
-                    }
-                    ControlId::BtnOpenFolder => {
-                        let dir = (*ptr).install_root.clone();
-                        let op = wide_z("open");
-                        let target = wide_z(&dir.to_string_lossy());
-                        ShellExecuteW(hwnd, op.as_ptr(), target.as_ptr(), null(), null(), SW_SHOW);
-                    }
-                    ControlId::BtnFinish => {
-                        PostMessageW(hwnd, WM_CLOSE, 0, 0);
-                        return 0;
-                    }
+                if activate_control(hwnd, ptr, ctrl) {
+                    return 0;
                 }
             }
-            InvalidateRect(hwnd, null(), 0);
+            if (*ptr).dirty {
+                InvalidateRect(hwnd, null(), 0);
+            }
             return 0;
         }
         WM_APP_WORKER_UPDATE => {
@@ -2165,15 +2208,22 @@ unsafe extern "system" fn wnd_proc(
                 if !u.install_root.as_os_str().is_empty() {
                     state.install_root = u.install_root.clone();
                 }
+                state.dirty = true;
                 if u.finished {
                     KillTimer(hwnd, TIMER_ANIM);
+                    state.anim_active = false;
                     state.anim_pct = 1.0;
                     state.worker_error = u.error.clone();
                     state.is_restore = u.is_restore;
                     state.current_step = u.applied_step;
                     state.current_px = u.applied_px;
                     state.has_existing_install = !u.is_restore && u.error.is_none();
+                    state.focus = None;
                     state.screen = Screen::Done;
+                    trim_working_set();
+                } else if (state.target_pct - state.anim_pct).abs() > 0.002 && !state.anim_active {
+                    SetTimer(hwnd, TIMER_ANIM, 30, null_mut());
+                    state.anim_active = true;
                 }
             }
             InvalidateRect(hwnd, null(), 0);
@@ -2184,7 +2234,12 @@ unsafe extern "system" fn wnd_proc(
             let diff = state.target_pct - state.anim_pct;
             if diff.abs() > 0.002 {
                 state.anim_pct += diff * 0.25;
+                state.dirty = true;
                 InvalidateRect(hwnd, null(), 0);
+            } else {
+                state.anim_pct = state.target_pct;
+                KillTimer(hwnd, TIMER_ANIM);
+                state.anim_active = false;
             }
             return 0;
         }
@@ -2194,13 +2249,114 @@ unsafe extern "system" fn wnd_proc(
                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
                 return 0;
             }
-            if w_param == VK_RETURN {
-                match state.screen {
-                    Screen::Setup => start_install_worker(state, false),
-                    Screen::Done => {
-                        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            if state.screen == Screen::Working {
+                return 0;
+            }
+            if w_param == VK_TAB {
+                let order = focus_order(
+                    state.screen,
+                    state.has_existing_install,
+                    state.worker_error.is_some(),
+                    state.is_restore,
+                );
+                if !order.is_empty() {
+                    let shift = GetKeyState(VK_SHIFT) < 0;
+                    let next = match state.focus.and_then(|f| order.iter().position(|&c| c == f)) {
+                        Some(pos) => {
+                            if shift {
+                                order[(pos + order.len() - 1) % order.len()]
+                            } else {
+                                order[(pos + 1) % order.len()]
+                            }
+                        }
+                        None => {
+                            if shift {
+                                order[order.len() - 1]
+                            } else {
+                                order[0]
+                            }
+                        }
+                    };
+                    state.focus = Some(next);
+                    state.dirty = true;
+                    InvalidateRect(hwnd, null(), 0);
+                }
+                return 0;
+            }
+            if matches!(w_param, VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN)
+                && state.screen == Screen::Setup
+            {
+                let cur_idx = match state.focus {
+                    Some(ControlId::PresetCard(i)) => i,
+                    Some(ControlId::BtnRestore) if matches!(w_param, VK_LEFT | VK_RIGHT) => {
+                        state.focus = Some(ControlId::BtnInstall);
+                        state.dirty = true;
+                        InvalidateRect(hwnd, null(), 0);
+                        return 0;
                     }
-                    Screen::Working => {}
+                    Some(ControlId::BtnInstall)
+                        if state.has_existing_install && matches!(w_param, VK_LEFT | VK_RIGHT) =>
+                    {
+                        state.focus = Some(ControlId::BtnRestore);
+                        state.dirty = true;
+                        InvalidateRect(hwnd, null(), 0);
+                        return 0;
+                    }
+                    _ => Preset::ALL
+                        .iter()
+                        .position(|&p| p == state.preset)
+                        .unwrap_or(0),
+                };
+                let next_idx = if w_param == VK_LEFT || w_param == VK_RIGHT {
+                    cur_idx ^ 1
+                } else {
+                    cur_idx ^ 2
+                };
+                state.preset = Preset::ALL[next_idx];
+                state.focus = Some(ControlId::PresetCard(next_idx));
+                state.dirty = true;
+                InvalidateRect(hwnd, null(), 0);
+                return 0;
+            }
+            if matches!(w_param, VK_LEFT | VK_RIGHT) && state.screen == Screen::Done {
+                state.focus = Some(match state.focus {
+                    Some(ControlId::BtnOpenFolder) => ControlId::BtnFinish,
+                    _ => ControlId::BtnOpenFolder,
+                });
+                state.dirty = true;
+                InvalidateRect(hwnd, null(), 0);
+                return 0;
+            }
+            if w_param == VK_SPACE {
+                if let Some(ctrl) = state.focus {
+                    if !activate_control(hwnd, ptr, ctrl) && (*ptr).dirty {
+                        InvalidateRect(hwnd, null(), 0);
+                    }
+                    return 0;
+                }
+            }
+            if w_param == VK_RETURN {
+                match state.focus {
+                    Some(
+                        ctrl @ (ControlId::ToggleStartup
+                        | ControlId::ToggleUninstall
+                        | ControlId::BtnRestore
+                        | ControlId::BtnInstall
+                        | ControlId::BtnOpenFolder
+                        | ControlId::BtnFinish),
+                    ) => {
+                        if !activate_control(hwnd, ptr, ctrl) && (*ptr).dirty {
+                            InvalidateRect(hwnd, null(), 0);
+                        }
+                        return 0;
+                    }
+                    _ => match state.screen {
+                        Screen::Setup => start_install_worker(state, false),
+                        Screen::Done => {
+                            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                        }
+                        Screen::Working => {}
+                    },
                 }
                 return 0;
             }
@@ -2210,6 +2366,8 @@ unsafe extern "system" fn wnd_proc(
             state.dpi = (w_param & 0xFFFF) as u32;
             state.fonts.destroy();
             state.fonts = FontSet::create(state.dpi);
+            state.glyph_cache.clear();
+            state.dirty = true;
             let mut rc = Rect {
                 left: 0,
                 top: 0,
@@ -2241,7 +2399,7 @@ unsafe extern "system" fn wnd_proc(
     DefWindowProcW(hwnd, msg, w_param, l_param)
 }
 
-fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut c_void, String> {
+pub fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut c_void, String> {
     unsafe {
         enable_per_monitor_dpi_v2();
         let h_inst = GetModuleHandleW(null());
@@ -2287,9 +2445,14 @@ fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut c_vo
         }
 
         let dpi = window_dpi(hwnd);
-        (*state_ptr).hwnd = hwnd;
-        (*state_ptr).dpi = dpi;
-        (*state_ptr).fonts = FontSet::create(dpi);
+        let st = &mut *state_ptr;
+        st.hwnd = hwnd;
+        st.worker_target
+            .hwnd
+            .store(hwnd as usize, Ordering::Release);
+        st.worker_target.alive.store(true, Ordering::Release);
+        st.dpi = dpi;
+        st.fonts = FontSet::create(dpi);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
 
         let _ = apply_dwm_dark_chrome(hwnd);
@@ -2324,11 +2487,12 @@ fn create_setup_window(state_ptr: *mut GuiState, show: bool) -> Result<*mut c_vo
     }
 }
 
-fn new_gui_state(
+pub fn new_gui_state(
     preset: Preset,
     startup: bool,
     register_uninstall: bool,
     has_existing: bool,
+    is_modify_mode: bool,
     install_root: PathBuf,
 ) -> *mut GuiState {
     let step = current_accessibility_step();
@@ -2349,11 +2513,16 @@ fn new_gui_state(
         startup,
         register_uninstall,
         has_existing_install: has_existing,
+        is_modify_mode,
         current_step: step,
         current_px: px,
         hover: None,
         pressed: None,
+        focus: None,
         tracking_mouse: false,
+        dirty: true,
+        anim_active: false,
+        trimmed_initial: false,
         hits: Vec::new(),
         anim_pct: 0.0,
         target_pct: 0.0,
@@ -2362,6 +2531,10 @@ fn new_gui_state(
         worker_error: None,
         is_restore: false,
         install_root,
+        worker_target: Arc::new(WorkerTarget {
+            alive: AtomicBool::new(false),
+            hwnd: std::sync::atomic::AtomicUsize::new(0),
+        }),
         shared_update: Arc::new(Mutex::new(WorkerUpdate {
             pct: 0.0,
             stage: 0,
@@ -2374,21 +2547,61 @@ fn new_gui_state(
             install_root: PathBuf::new(),
         })),
         fonts: dummy_fonts,
+        glyph_cache: GlyphSpriteCache::default(),
         backbuffer: None,
-        app_icon: modern_inverted_cursor::create_split_cursor_hicon(32, Preset::Regular, false),
+        app_icon: create_split_cursor_hicon(32, Preset::Regular, false),
     }))
 }
 
-fn run_smoke_ui(out_dir: &Path) -> Result<(), String> {
-    let state_ptr = new_gui_state(Preset::Compact, true, true, true, PathBuf::from(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors"));
+pub fn bring_existing_setup_to_front() -> bool {
+    let cls = wide_z(WND_CLASS);
+    // SAFETY: NUL-terminated class name passed to `FindWindowW` and `SetForegroundWindow`.
+    unsafe {
+        let existing = FindWindowW(cls.as_ptr(), null());
+        if !existing.is_null() {
+            SetForegroundWindow(existing);
+            return true;
+        }
+    }
+    false
+}
+
+pub fn run_smoke_ui(out_dir: &Path, dpi_override: Option<u32>) -> Result<(), String> {
+    let _ = fs::create_dir_all(out_dir);
+    let state_ptr = new_gui_state(
+        Preset::Compact,
+        true,
+        true,
+        true,
+        false,
+        PathBuf::from(r"C:\Users\Demo\AppData\Local\ModernInvertedCursors"),
+    );
     let hwnd = create_setup_window(state_ptr, false)?;
     unsafe {
         let state = &mut *state_ptr;
+        if let Some(dpi) = dpi_override {
+            let clamped = dpi.clamp(96, 240);
+            if clamped != state.dpi {
+                state.dpi = clamped;
+                state.fonts.destroy();
+                state.fonts = FontSet::create(clamped);
+                state.glyph_cache.clear();
+            }
+        }
+
         state.screen = Screen::Setup;
+        state.focus = None;
         render_ui(state);
         if let Some(bb) = state.backbuffer.as_ref() {
             save_backbuffer_bmp(bb, &out_dir.join("01_setup_dark.bmp"))?;
         }
+
+        state.focus = Some(ControlId::PresetCard(2));
+        render_ui(state);
+        if let Some(bb) = state.backbuffer.as_ref() {
+            save_backbuffer_bmp(bb, &out_dir.join("04_setup_focus_dark.bmp"))?;
+        }
+        state.focus = None;
 
         state.screen = Screen::Working;
         state.anim_pct = 0.64;
@@ -2430,166 +2643,4 @@ fn run_smoke_ui(out_dir: &Path) -> Result<(), String> {
         let _ = Box::from_raw(state_ptr);
     }
     Ok(())
-}
-
-fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    for i in 0..args.len() {
-        if args[i] == flag {
-            return args.get(i + 1).cloned();
-        }
-        if let Some(v) = args[i].strip_prefix(&format!("{flag}=")) {
-            return Some(v.to_string());
-        }
-    }
-    None
-}
-
-fn run() -> Result<(), String> {
-    let args: Vec<String> = env::args().skip(1).collect();
-
-    if let Some(smoke_dir) = arg_value(&args, "--smoke-ui") {
-        return run_smoke_ui(Path::new(&smoke_dir));
-    }
-
-    if let Some(sandbox_dir) = arg_value(&args, "--sandbox") {
-        let preset = parse_preset_arg(&args)?.unwrap_or(Preset::Compact);
-        let (root, install_dir, backup_path) = app_paths_for_root(PathBuf::from(sandbox_dir));
-        let (step, px) = execute_install_pipeline(
-            &root,
-            &install_dir,
-            &backup_path,
-            preset,
-            false,
-            false,
-            true,
-            0,
-            None,
-        )?;
-        let report = format!(
-            "SANDBOX_OK preset={} step={} px={} assets=32 guardian_bytes={}\n",
-            preset.cli_name(),
-            step,
-            px,
-            GUARDIAN_EXE_BYTES.len()
-        );
-        let _ = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(root.join("sandbox-report.txt"))
-            .and_then(|mut f| f.write_all(report.as_bytes()));
-        return Ok(());
-    }
-
-    if args.iter().any(|a| a == "--restore") {
-        let (root, _, backup_path) = app_paths()?;
-        let log = BoundedLogger::new(root.join("guardian.log"), false);
-        stop_any_running_guardian();
-        reg_delete_value(RUN_SUBKEY, GUARDIAN_RUN_VALUE);
-        reg_delete_value(CONFIG_SUBKEY, "Preset");
-        unregister_uninstall_entry();
-        let gexe = root.join(GUARDIAN_EXE_NAME);
-        if gexe.exists() {
-            let _ = fs::remove_file(&gexe);
-        }
-        return restore_backup(&backup_path, Some(&log));
-    }
-
-    if args.iter().any(|a| a == "--silent") {
-        let preset = parse_preset_arg(&args)?.unwrap_or(Preset::Compact);
-        let no_startup = args.iter().any(|a| a == "--no-startup");
-        let (root, install_dir, backup_path) = app_paths()?;
-        let _ = execute_install_pipeline(
-            &root,
-            &install_dir,
-            &backup_path,
-            preset,
-            !no_startup,
-            true,
-            false,
-            0,
-            None,
-        )?;
-        let _ = register_and_apply(preset, &install_dir, None);
-        return Ok(());
-    }
-
-    let (root, _, backup_path) = app_paths()?;
-    let has_existing = backup_path.exists() || root.join(GUARDIAN_EXE_NAME).exists();
-    let initial_preset = parse_preset_arg(&args)?.unwrap_or_else(load_saved_preset);
-
-    let state_ptr = new_gui_state(initial_preset, true, true, has_existing, root);
-    let hwnd = create_setup_window(state_ptr, true)?;
-
-    unsafe {
-        let mut msg: Msg = std::mem::zeroed();
-        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-
-        let mut state = Box::from_raw(state_ptr);
-        if let Some(mut bb) = state.backbuffer.take() {
-            bb.destroy();
-        }
-        state.fonts.destroy();
-        if !state.app_icon.is_null() {
-            DestroyIcon(state.app_icon);
-        }
-        let _ = hwnd;
-    }
-    Ok(())
-}
-
-fn main() {
-    if let Err(err) = run() {
-        let title = wide_z("Modern Inverted Cursors Setup Error");
-        let body = wide_z(&err);
-        unsafe {
-            MessageBoxW(null_mut(), body.as_ptr(), title.as_ptr(), 0x0001_0010);
-        }
-        std::process::exit(1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_win32_setup_structs_match_sdk() {
-        #[cfg(target_pointer_width = "64")]
-        {
-            assert_eq!(std::mem::size_of::<TrackMouseEvent>(), 24);
-            assert_eq!(std::mem::size_of::<MonitorInfo>(), 40);
-            assert_eq!(std::mem::size_of::<PaintStruct>(), 72);
-            assert_eq!(std::mem::size_of::<BitmapInfoHeader>(), 40);
-        }
-        #[cfg(target_pointer_width = "32")]
-        {
-            assert_eq!(std::mem::size_of::<TrackMouseEvent>(), 16);
-            assert_eq!(std::mem::size_of::<MonitorInfo>(), 40);
-            assert_eq!(std::mem::size_of::<PaintStruct>(), 64);
-            assert_eq!(std::mem::size_of::<BitmapInfoHeader>(), 40);
-        }
-    }
-
-    #[test]
-    fn test_embedded_guardian_is_nonempty_pe_binary() {
-        assert!(GUARDIAN_EXE_BYTES.len() > 10_000);
-        assert_eq!(&GUARDIAN_EXE_BYTES[..2], b"MZ");
-        let pe_off = u32::from_le_bytes([
-            GUARDIAN_EXE_BYTES[0x3C],
-            GUARDIAN_EXE_BYTES[0x3D],
-            GUARDIAN_EXE_BYTES[0x3E],
-            GUARDIAN_EXE_BYTES[0x3F],
-        ]) as usize;
-        assert_eq!(&GUARDIAN_EXE_BYTES[pe_off..pe_off + 4], b"PE\0\0");
-        let machine = u16::from_le_bytes([GUARDIAN_EXE_BYTES[pe_off + 4], GUARDIAN_EXE_BYTES[pe_off + 5]]);
-        #[cfg(target_arch = "x86_64")]
-        assert_eq!(machine, 0x8664);
-        #[cfg(target_arch = "aarch64")]
-        assert_eq!(machine, 0xAA64);
-        #[cfg(target_arch = "x86")]
-        assert_eq!(machine, 0x014C);
-    }
 }

@@ -1,10 +1,10 @@
-# Modern Inverted Cursors — Windows 7–11 Setup & Tray Guardian (`v1.0.x`)
+# Modern Inverted Cursors — Windows 7–11 Setup & Tray Guardian (`v1.1.0`)
 
 A lightweight, **pure-Rust (zero external crates)**, **100% FOSS (MIT Licensed)** Windows **7 / 8 / 8.1 / 10 / 11** installer and background system-tray guardian for **[Modern Inverted Mouse Cursors v3.6.2](https://github.com/emvaized/modern_inverted_mouse_cursors)** — preserving true dynamic XOR pixel inversion with balanced pointer sizing and **zero console/terminal windows**.
 
-> **FOSS & Community Contributions Welcome:** Everything here is **100% Free and Open Source Software (MIT License)**. Anyone is completely free to use, tweak, fork, or build their own version! If you spot any bugs, Windows quirks, or improvements, please flag them anytime in **[GitHub Issues](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues)** or open a Pull Request.
+> **FOSS & Community Contributions Welcome:** Everything here is **100% Free and Open Source Software (MIT License)**. Anyone is free to use, tweak, fork, or build their own version. Report bugs or Windows quirks anytime via **[GitHub Issues](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues)**.
 >
-> **Release Series:** `v1.0.0` (x64), `v1.0.1` (x64 + native ARM64), and `v1.0.2` (adding **Legacy Windows 7 SP1 / 8 / 8.1 / 10** `x64` & 32-bit `x86` builds) make up our **initial first release series (`v1.0.x`)**. Future updates may follow as we discover new bugs, edge cases, or Windows updates.
+> **Release Series:** **`v1.1.0`** is the hardened, cleanly modularized stable release introducing fail-safe backup validation, readiness handshakes, targeted instance shutdown, sprite-cached UI redraws, and full keyboard accessibility. Historical `v1.0.x` (`v1.0.0`, `v1.0.1`, `v1.0.2`) and `v1.1.0-rc.1` remain preserved in GitHub Releases, and `legacy-v5.1` preserves early V1–V5.1 history.
 
 | Setup Screen | Installing Screen | Done Screen |
 | :---: | :---: | :---: |
@@ -12,65 +12,36 @@ A lightweight, **pure-Rust (zero external crates)**, **100% FOSS (MIT Licensed)*
 
 ---
 
-## Why This Exists
+## Architecture Highlights (`v1.1.0`)
 
-Windows 11's built-in **Inverted** accessibility cursor style provides live pixel-level color inversion, but its stock pointer artwork is decades old. **Modern Inverted Mouse Cursors v3.6.2** solves the artwork while keeping XOR inversion — however, applying custom `.cur`/`.ani` packs on Windows 11 runs into three platform quirks:
-
-1. `SystemParametersInfoW(SPI_SETCURSORS)` frequently fails silently or leaves Accessibility scaling active on Windows 11 builds (`GetLastError=0`).
-2. Adjusting **Settings → Accessibility → Mouse pointer and touch → Size** overwrites custom cursors with stock pointers and scales `CursorBaseSize` aggressively (`32 → 256 px`, causing severe pixelation on low-bit-depth XOR masks).
-3. Running a CLI guardian at Windows sign-in opens a full **Windows Terminal** window on the taskbar; closing it kills cursor protection.
-
-This project solves all three cleanly in **pure Rust + Win32 APIs** (`std` only, zero crates.io dependencies):
-
-- **Sleek Dark-Mode Setup (`ModernInvertedSetup-v1.0.0.exe`, ~590 KB):** Native Windows 11 dark title bar (`DWMWA_USE_IMMERSIVE_DARK_MODE`), rounded corners, Per-Monitor DPI V2 scaling, 4 vector preset previews, parallel 4-worker SHA-1 verified asset download, and Windows **Installed Apps** integration (`HKCU\...\Uninstall`).
-- **Silent System-Tray Guardian (`ModernInvertedCursorGuardian.exe`, ~270 KB):** `#![windows_subsystem = "windows"]` background daemon living in **Show hidden icons** (`Shell_NotifyIconW`) with **0.00% idle CPU**, **~1.4 MB private RAM**, and **zero subprocess spawning** (`advapi32.dll` direct Registry calls instead of `reg.exe`).
+- **Clean Setup / Guardian Separation:**
+  - `ModernInvertedCursors-Setup-v1.1.0-<arch>.exe`: Dark-mode Win32 GUI & headless CLI installer/maintainer (`--silent`, `--modify`, `--uninstall`, `--restore`, `--restore-system-defaults`, `--sandbox`, `--smoke-ui`). Installed alongside the Guardian as `%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursors-Setup.exe` and registered in Windows **Installed Apps** (`ModifyPath`, `UninstallString`, `QuietUninstallString`, `NoModify=0`, `NoRepair=0`).
+  - `ModernInvertedCursors-Guardian-v1.1.0-<arch>.exe`: Silent `#![windows_subsystem = "windows"]` system-tray daemon (`~300 KB` x64, `0.46–0.75 MB` idle WS, `~1.5 MB` Private RAM) running in **Show hidden icons** (`Shell_NotifyIconW`).
+- **Safety & Reliability Hardening:**
+  - **Readiness Handshake & Rollback:** Setup verifies child process survival, `NamedReadyEvent`, tray window PID, and `RuntimeVersion` before reporting success, rolling back cleanly on failure.
+  - **Transactional Restore:** Original cursor backup `.reg` (UTF-16LE/UTF-8) is validated (registry header + HKCU cursor scope) *before* touching startup registration, metadata, or files. Existing valid `backup-original.reg` is never overwritten on upgrades from `v1.0.0–v1.0.2`.
+  - **Strict CLI & Logging:** Unrecognized CLI flags or unknown presets fail fast (`exit 1`) and log cleanly to `setup-error.log` with zero blocking `MessageBoxW` dialogs in headless modes.
+  - **Targeted IPC Shutdown:** Replaced `taskkill /IM` with `CreateToolhelp32Snapshot` + `QueryFullProcessImageNameW` verified `WM_CLOSE` shutdown (bounded wait before targeted fallback).
+  - **Security:** `build.rs` fails closed if embedded Guardian PE payload is missing/invalid; System32-pinned `load_system_dll` blocks CWD DLL hijacking; WinHTTP requests enforce TLS 1.2, keep-alive reuse, timeouts, `256 KB` asset caps, and full Git blob SHA-1 checks; `cmd.exe` self-delete uses `MIC_DEL_TARGET` env var cleanly.
+- **Performance & Accessibility:**
+  - `AssetVerifyCache` skips redundant 32-file disk hashing on hot Guardian reapplies (`3.90×` faster) while preserving cryptographic SHA-1 verification on startup/drift.
+  - Single-HKEY `reg_sync_cursor_values` elides no-op registry writes (`3.72×` faster) and removes redundant pre-apply `SPI_SETCURSORS` reloads.
+  - `CursorGlyphSprite` + `GlyphSpriteCache` accelerates UI cursor repaints (`289.4×` faster); `WM_PAINT` `BitBlt` dirty-skip and idle `TIMER_ANIM` stop keep idle CPU ~`0%`; full keyboard focus (`Tab`, `Shift+Tab`, arrows, `Space`, `Enter`, `Esc`) tested visually across `100%–200%` DPI.
 
 ---
 
 ## Quick Install (Windows 7 SP1 through Windows 11 — x64, ARM64 & Legacy x86)
 
-1. Download the installer matching your Windows version and CPU from **[GitHub Releases](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/latest)**:
-   - **Modern Windows 10 / 11 (x64 Intel/AMD):** `ModernInvertedSetup-v1.0.2-x64.exe`
-   - **Modern Windows 11 (ARM64 Snapdragon / Windows on ARM):** `ModernInvertedSetup-v1.0.2-arm64.exe` *(built & tested natively on GitHub's hosted `windows-11-arm` runner)*
-   - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (x64):** `ModernInvertedSetup-v1.0.2-win7-win10-x64.exe` *(compiled with Rust `1.75.0` + `+crt-static` + native WinHTTP TLS 1.2 — zero VC++ Redistributable or `curl.exe` required)*
-   - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (32-bit x86):** `ModernInvertedSetup-v1.0.2-win7-win10-x86.exe`
-2. Double-click the downloaded `.exe` (no admin rights or terminal required).
-3. Choose a preset (**Compact** recommended), keep the startup & Installed Apps toggles enabled, and click **Quick Install**.
-4. Your cursors switch immediately and the guardian settles into **Show hidden icons (`^`)** on the taskbar.
+Download the installer matching your Windows version and CPU from **[GitHub Releases](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/latest)**:
 
-### System Tray Controls
+- **Modern Windows 10 / 11 (x64 Intel/AMD):** `ModernInvertedCursors-Setup-v1.1.0-x64.exe`
+- **Modern Windows 11 (ARM64 Snapdragon / Windows on ARM):** `ModernInvertedCursors-Setup-v1.1.0-arm64.exe` *(built & tested natively on GitHub `windows-11-arm` runner)*
+- **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (x64):** `ModernInvertedCursors-Setup-v1.1.0-win7-win10-x64.exe` *(Rust `1.75.0` + `+crt-static`, zero external CRT)*
+- **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (32-bit x86):** `ModernInvertedCursors-Setup-v1.1.0-win7-win10-x86.exe` *(embedded `asInvoker` + Win7–Win11 manifest)*
 
-Left-click or right-click the split black/white arrow icon in **Show hidden icons**:
+Double-click to install or repair, choose a preset (**Compact** recommended), or press `Tab` / Arrow keys + `Enter`.
 
-- **Status line:** Shows active preset, balanced pixel size, and Accessibility slider step (e.g., `Compact (36px, 2/15)`).
-- **Reapply Cursors Now** *(or double-click the tray icon)* — immediately re-enforces all 17 system cursor handles.
-- **Pause Guardian** — temporarily suspends auto-reapply (turns the tray icon badge amber) if you want to test other cursors.
-- **Preset** — switch live between `Compact`, `No Tail`, `Tail Detached`, and `Regular`.
-- **Start at Windows Sign-in** — toggle `HKCU\...\Run` startup registration.
-- **Restore Original Cursors...** — restores your saved `backup-original.reg` and exits cleanly.
-
----
-
-## Measured Comparison: Legacy V5.1 vs V6 / v1.0.0
-
-All measurements observed directly on Windows 11 (`x86_64-pc-windows-msvc`, 125% DPI):
-
-| Metric | Legacy V5.1 (`legacy-v5.1` branch) | V6 Guardian + v1.0.0 Setup (`main`) | Improvement |
-| :--- | :--- | :--- | :--- |
-| Guardian EXE size | `5,161,090` bytes (~4.92 MB) | **`276,480` bytes (~270 KB)** | **18.7× smaller** |
-| Startup window | Full Windows Terminal window | **None** (`PE Subsystem = 2` GUI) | **100% silent** |
-| Registry apply (20 keys) | `795.13 ms` (20× `reg.exe`) | **`2.92 ms`** (native `advapi32.dll`) | **271.9× faster** |
-| Idle CPU usage | `reg.exe` spikes on boot/change | **0.00% idle** (`0.078s` total / 30+ min) | **Kernel event wait** |
-| Guardian RAM | `7.53 MB` Working Set | **`~0.5–2.3 MB` Working Set / `~1.37 MB` Private** | **~3–15× lighter** |
-| Log disk behavior | New `installer-*.log` every boot | **Single 32 KB rotating `guardian.log`** | **Zero log clutter** |
-
-See [docs/TESTS_AND_BENCHMARKS.md](docs/TESTS_AND_BENCHMARKS.md) for full benchmark tables and test logs.
-
----
-
-## Balanced Accessibility Sizing Curve
-
-The Windows 11 Accessibility pointer-size slider (`1..15`) normally scales `CursorBaseSize` from `32 px` to `256 px` (`+16 px` per step). Because XOR cursors use crisp 1-bit/low-color bitmaps, V6 maps those exact 15 positions cleanly to `32..88 px` in `4 px` increments:
+### Balanced Accessibility Sizing Curve
 
 ```text
 Step  1 -> 32 px     Step  6 -> 52 px     Step 11 -> 72 px
@@ -84,74 +55,65 @@ Step  5 -> 48 px     Step 10 -> 68 px     Step 15 -> 88 px
 
 ## CLI & Automation Flags
 
-Both executables support unattended CLI options without opening any window:
-
 ```powershell
-# Headless unattended install on a new PC
-.\ModernInvertedSetup-v1.0.0.exe --silent --preset compact
+# Headless unattended install (exits 1 + writes setup-error.log on any error)
+.\ModernInvertedCursors-Setup-v1.1.0-x64.exe --silent --preset compact
 
-# Restore original Windows cursors and remove startup/uninstall keys
-.\ModernInvertedSetup-v1.0.0.exe --restore
+# Open Setup in maintenance mode against existing installation
+"%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursors-Setup.exe" --modify
 
-# Isolated non-destructive sandbox test (no cursor or HKCU changes)
-.\ModernInvertedSetup-v1.0.0.exe --sandbox C:\Temp\cursor-test --preset compact
+# Validate backup and restore original Windows cursors cleanly
+"%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursors-Setup.exe" --uninstall
+.\ModernInvertedCursors-Setup-v1.1.0-x64.exe --restore
 
-# Render dark-mode UI smoke captures at current DPI
-.\ModernInvertedSetup-v1.0.0.exe --smoke-ui C:\Temp\ui-smoke
+# Isolated non-destructive sandbox install & multi-DPI UI smoke renders
+.\ModernInvertedCursors-Setup-v1.1.0-x64.exe --sandbox C:\Temp\cursor-test --preset compact
+.\ModernInvertedCursors-Setup-v1.1.0-x64.exe --smoke-ui C:\Temp\ui-smoke --dpi 144
 
-# Control the running tray guardian directly
-"%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursorGuardian.exe" --tray
-"%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursorGuardian.exe" --quit
-"%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursorGuardian.exe" --uninstall
+# Direct Guardian tray & sandbox controls
+"%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursors-Guardian.exe" --tray
+"%LOCALAPPDATA%\ModernInvertedCursors\ModernInvertedCursors-Guardian.exe" --quit
 ```
 
 ---
 
-## Repository Structure & Branches
-
-- **`main`** — Current pure-Rust `v1.0.x` Cargo workspace, Dark-Mode Setup GUI, V6 Tray Guardian, docs, benchmarks, and multi-arch CI workflow (`x64` + `ARM64`).
-- **`legacy-v5.1`** — Complete preserved Git history of earlier V1–V5.1 PowerShell and console-Rust iterations prior to the V6 rewrite.
+## Repository Structure
 
 ```text
 .
-├── Cargo.toml                  # Zero external crates ([dependencies] empty)
-├── build.rs                    # Resolves target-matched guardian binary (x64, arm64, legacy x86) + asInvoker manifest
-├── build.ps1                   # Build guardian -> setup -> cargo test -> SHA256SUMS (supports -Toolchain/-Target/-StaticCrt)
+├── Cargo.toml                         # Version 1.1.0, rust-version 1.75.0, zero external crates
+├── build.rs                           # Fail-closed embedded Guardian gate + asInvoker Win7-11 manifest
+├── build.ps1                          # Build Guardian -> Setup -> cargo test -> SHA256SUMS.txt
 ├── src/
-│   ├── lib.rs                  # Shared Win32 registry, WinHTTP/curl, SHA-1, cursor engine & SDF renderer
+│   ├── lib.rs                         # Core exports & unit tests
+│   ├── registry.rs                    # HKCU Registry, single-HKEY scheme sync, System32 DLL loader, CLI validation
+│   ├── assets.rs                      # 32 pinned v3.6.2 assets, WinHTTP session reuse, AssetVerifyCache & SHA-1
+│   ├── cursors.rs                     # Pre-validated atomic LoadImageW + SetSystemCursor application
+│   ├── backup.rs                      # UTF-16LE/UTF-8 .reg parser & transactional restore
+│   ├── ipc.rs                         # NamedReadyEvent & targeted PID/path-verified Guardian shutdown
+│   ├── render.rs                      # 4x4 supersampled CursorGlyphSprite + HICON generator
 │   └── bin/
-│       ├── guardian.rs         # #![windows_subsystem = "windows"] tray daemon
-│       └── setup.rs            # Dark-Mode Win32 GUI installer (embeds target guardian EXE)
-├── dist/
-│   ├── ModernInvertedSetup-v1.0.2-x64.exe
-│   ├── ModernInvertedSetup-v1.0.2-win7-win10-x64.exe
-│   ├── ModernInvertedSetup-v1.0.2-win7-win10-x86.exe
-│   ├── ModernInvertedCursorGuardian*.exe
-│   └── SHA256SUMS.txt          # Note: ARM64 binaries are built & published on GitHub Releases via windows-11-arm
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── TESTS_AND_BENCHMARKS.md
-│   ├── POST_USAGE_NOTES.md
-│   ├── DEBUGGING_HISTORY.md
-│   └── images/
-└── archive/                    # Historical V1..V5.1 sources
+│       ├── guardian.rs                # Silent system-tray guardian + isolated --sandbox mode
+│       └── setup/{main,install,ui}.rs # Dark-mode Win32 Setup/Maintenance app
+├── tests/integration_hardening.rs     # Migration, corrupt-backup & CLI/asset integration tests
+└── docs/                              # Architecture, Bug/Security Audits, Performance, Test Matrix & Journal
 ```
 
 ---
 
-## Build from Source & Contributing (FOSS)
+## Build & Verify from Source
 
-Requires Rust (`rustc` / `cargo` on Windows x64 or Windows ARM64; zero external crates needed):
+Requires Rust `1.99.0` (modern) or Rust `1.75.0` (legacy Windows 7–10 targets; zero external crates needed):
 
 ```powershell
-git clone https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11.git
-cd Modern-Inverted-Cursor-Windows11
-.\build.ps1
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+powershell -ExecutionPolicy Bypass -File .\build.ps1 -Arch x64 -Suffix x64
 ```
 
-Everything in this project is **100% Free and Open Source Software (FOSS)**. Feel free to fork, tweak, study, or build your own custom version. Found a bug or want to suggest an improvement? Open an [Issue](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues) or submit a Pull Request!
+See [docs/TESTS_AND_BENCHMARKS.md](docs/TESTS_AND_BENCHMARKS.md), [docs/PERFORMANCE_REPORT.md](docs/PERFORMANCE_REPORT.md), [docs/BUG_AUDIT.md](docs/BUG_AUDIT.md), [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md), and [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
-## Upstream Attribution & License
+## License & Upstream Attribution
 
-- Cursor artwork assets are downloaded at runtime from **[emvaized/modern_inverted_mouse_cursors v3.6.2](https://github.com/emvaized/modern_inverted_mouse_cursors)** (MIT) and verified individually by expected byte size and Git blob SHA-1. See [UPSTREAM.md](UPSTREAM.md).
-- Installer & guardian source code is licensed under the [MIT License](LICENSE).
+- Cursor assets downloaded cleanly over HTTPS and verified by Git blob SHA-1 from **[emvaized/modern_inverted_mouse_cursors v3.6.2](https://github.com/emvaized/modern_inverted_mouse_cursors)** (MIT). See [UPSTREAM.md](UPSTREAM.md).
+- Setup & Guardian source code is MIT Licensed ([LICENSE](LICENSE)).

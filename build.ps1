@@ -55,36 +55,42 @@ if ($StaticCrt) {
     }
 }
 
-$GuardianName = if ($Suffix -eq "x64") { "ModernInvertedCursorGuardian.exe" } else { "ModernInvertedCursorGuardian-$Suffix.exe" }
-$GuardianTagged = "ModernInvertedCursorGuardian-$Suffix.exe"
-$SetupOut = Join-Path $Dist "ModernInvertedSetup-v$Version-$Suffix.exe"
+$GuardianName = "ModernInvertedCursors-Guardian-v$Version-$Suffix.exe"
+$GuardianStableLink = "ModernInvertedCursors-Guardian-$Suffix.exe"
+$SetupOut = Join-Path $Dist "ModernInvertedCursors-Setup-v$Version-$Suffix.exe"
 $GuardianOut = Join-Path $Dist $GuardianName
-$GuardianArchCopy = Join-Path $Dist $GuardianTagged
+$GuardianLatestCopy = Join-Path $Dist $GuardianStableLink
 
 Push-Location $Root
 try {
-    Write-Host "[1/4] Building ModernInvertedCursorGuardian ($Suffix, release)..." -ForegroundColor Cyan
-    & cargo @CargoPrefix build --release @TargetArgs --bin ModernInvertedCursorGuardian
+    Write-Host "[1/4] Building ModernInvertedCursors-Guardian ($Suffix, release)..." -ForegroundColor Cyan
+    $env:MIC_BUILDING_GUARDIAN = "1"
+    Remove-Item Env:GUARDIAN_EMBED_PATH -ErrorAction SilentlyContinue
+    & cargo @CargoPrefix build --release @TargetArgs --bin ModernInvertedCursors-Guardian
+    Remove-Item Env:MIC_BUILDING_GUARDIAN -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -ne 0) { throw "Guardian build failed." }
-    $BuiltGuardian = Join-Path $TargetRoot "$TargetSubdir\ModernInvertedCursorGuardian.exe"
+    $BuiltGuardian = Join-Path $TargetRoot "$TargetSubdir\ModernInvertedCursors-Guardian.exe"
     Copy-Item $BuiltGuardian $GuardianOut -Force
-    if ($GuardianArchCopy -ne $GuardianOut) {
-        Copy-Item $BuiltGuardian $GuardianArchCopy -Force
+    if ($GuardianLatestCopy -ne $GuardianOut) {
+        Copy-Item $BuiltGuardian $GuardianLatestCopy -Force
     }
 
     $env:GUARDIAN_EMBED_PATH = $GuardianOut
 
-    Write-Host "[2/4] Building ModernInvertedSetup v$Version ($Suffix, release)..." -ForegroundColor Cyan
-    & cargo @CargoPrefix build --release @TargetArgs --bin ModernInvertedSetup
+    Write-Host "[2/4] Building ModernInvertedCursors-Setup v$Version ($Suffix, release)..." -ForegroundColor Cyan
+    & cargo @CargoPrefix build --release @TargetArgs --bin ModernInvertedCursors-Setup
     if ($LASTEXITCODE -ne 0) { throw "Setup build failed." }
-    Copy-Item (Join-Path $TargetRoot "$TargetSubdir\ModernInvertedSetup.exe") $SetupOut -Force
+    Copy-Item (Join-Path $TargetRoot "$TargetSubdir\ModernInvertedCursors-Setup.exe") $SetupOut -Force
 
-    # Keep dist clean of superseded setup installers for this exact suffix (and untagged v1.0.0 filenames)
-    Get-ChildItem $Dist -Filter "ModernInvertedSetup-v*-$Suffix.exe" |
-        Where-Object FullName -ne $SetupOut |
-        Remove-Item -Force
+    # Keep dist clean of superseded setup/guardian versioned filenames for this exact suffix
+    Get-ChildItem $Dist -Filter "*.exe" | Where-Object {
+        $_.FullName -ne $SetupOut -and $_.Name -match "^ModernInverted(?:Cursors-)?Setup(?:-v[^-]+)?-$([regex]::Escape($Suffix))\.exe$"
+    } | Remove-Item -Force
+    Get-ChildItem $Dist -Filter "*.exe" | Where-Object {
+        $_.FullName -ne $GuardianOut -and $_.Name -match "^ModernInverted(?:Cursors-)?Cursor?Guardian-v[^-]+-$([regex]::Escape($Suffix))\.exe$"
+    } | Remove-Item -Force
     Get-ChildItem $Dist -Filter "ModernInvertedSetup-v*.exe" |
-        Where-Object { $_.Name -match "^ModernInvertedSetup-v[0-9.]+\.exe$" -and $_.FullName -ne $SetupOut } |
+        Where-Object { $_.FullName -ne $SetupOut } |
         Remove-Item -Force
 
     Write-Host "[3/4] Running unit tests ($Suffix)..." -ForegroundColor Cyan
@@ -93,7 +99,7 @@ try {
 
     Write-Host "[4/4] Generating SHA256SUMS.txt..." -ForegroundColor Cyan
     Get-ChildItem $Dist -Filter "*.pdb" | Remove-Item -Force
-    $Sums = Get-ChildItem $Dist -Filter "*.exe" | Sort-Object Name | ForEach-Object {
+    $Sums = Get-ChildItem $Dist -Filter "ModernInvertedCursors-*-v*.exe" | Sort-Object Name | ForEach-Object {
         "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
     }
     $Sums | Set-Content (Join-Path $Dist "SHA256SUMS.txt") -Encoding ascii

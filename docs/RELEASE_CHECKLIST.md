@@ -1,0 +1,19 @@
+# Release Candidate Checklist (`v1.1.0-rc.1`)
+
+All 15 mandatory acceptance gates prior to user sign-off for stable release:
+
+- [x] **Gate 1:** No known critical or high-severity unresolved defects (`BUG-01`..`BUG-15` resolved).
+- [x] **Gate 2:** Installer (`ModernInvertedCursors-Setup`) and Guardian (`ModernInvertedCursors-Guardian`) cleanly separated and named consistently across `x64`, `arm64`, `win7-win10-x64`, `win7-win10-x86`.
+- [x] **Gate 3:** Setup installs and maintains both persistent Setup/Maintenance executable and Guardian executable cleanly.
+- [x] **Gate 4:** Safe, non-destructive upgrade migration from `v1.0.0`, `v1.0.1`, and `v1.0.2` (preserving valid `backup-original.reg`).
+- [x] **Gate 5:** Failure-safe transactional restore/uninstall preserving config if backup is missing or corrupt.
+- [x] **Gate 6:** Bounded startup readiness handshake + rollback on failure; `--silent` exits non-zero cleanly with zero blocking `MessageBoxW`.
+- [x] **Gate 7:** Zero indiscriminate `taskkill /IM`; PID + executable path verified shutdown only.
+- [x] **Gate 8:** Unit, integration, backup/restore, IPC failure-injection, and endurance tests passing cleanly (`cargo fmt --check`, `cargo clippy -- -D warnings`, `30/30` tests per local target).
+- [x] **Gate 9:** Genuine Windows CI green across Modern `x64`, Native `ARM64`, Legacy `win7-win10-x64`, and Legacy `win7-win10-x86` (including PE + import audits — verified on run `#43233586021`).
+- [x] **Gate 10:** Real GUI interactive flows + visual inspection at `100%`, `125%`, `150%`, and `200%` DPI scaling verified.
+- [x] **Gate 11:** Multi-trial before/after resource & latency benchmarks recorded with no unexplained regressions.
+- [x] **Gate 12:** Security findings resolved or accurately documented and accepted (`SEC-01`..`SEC-08`).
+- [x] **Gate 13:** Consistently named artifacts with verified `SHA256SUMS.txt`.
+- [x] **Gate 14:** User docs (`README.md`, post-usage, CLI/upgrade instructions) match exact code & CI facts.
+- [x] **Gate 15:** Draft PR & Release Candidate `v1.1.0-rc.1` prepared on `hardening/v1.1.0-audit` without merging to `main` or altering stable `v1.0.x` releases.
