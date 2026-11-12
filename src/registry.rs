@@ -460,6 +460,168 @@ pub fn reg_set_string(
     }
 }
 
+/// Opens `subkey` once with read/write access and updates only the values whose current data
+/// or registry type differs from the desired cursor scheme state. Returns `Ok(true)` if any value
+/// was written, or `Ok(false)` when all values already matched verbatim.
+pub fn reg_sync_cursor_values(
+    subkey: &str,
+    default_name: &str,
+    pairs: &[(&str, &str)],
+    scheme_source: u32,
+) -> Result<bool, String> {
+    const KEY_QUERY_VALUE: u32 = 0x0001;
+    const KEY_SET_VALUE: u32 = 0x0002;
+    const REG_SZ: u32 = 1;
+    const REG_EXPAND_SZ: u32 = 2;
+    const REG_DWORD: u32 = 4;
+    const RRF_RT_REG_SZ: u32 = 0x0000_0002;
+    const RRF_RT_REG_EXPAND_SZ: u32 = 0x0000_0004;
+    const RRF_RT_REG_DWORD: u32 = 0x0000_0010;
+    const RRF_NOEXPAND: u32 = 0x1000_0000;
+
+    let w_subkey = wide_z(subkey);
+    let mut key: *mut c_void = std::ptr::null_mut();
+    // SAFETY: `w_subkey` is NUL-terminated; `key` is always closed before return.
+    let open = unsafe {
+        RegCreateKeyExW(
+            hkcu(),
+            w_subkey.as_ptr(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            KEY_QUERY_VALUE | KEY_SET_VALUE,
+            std::ptr::null_mut(),
+            &mut key,
+            std::ptr::null_mut(),
+        )
+    };
+    if open != 0 || key.is_null() {
+        return Err(format!("RegCreateKeyExW({subkey}) failed with status={open}"));
+    }
+
+    let mut changed = false;
+    let mut buf = vec![0u16; 260];
+
+    let sync_str = |name_opt: Option<&str>, expand_sz: bool, desired: &str, buf: &mut Vec<u16>, changed: &mut bool| -> Result<(), String> {
+        let w_name = name_opt.map(wide_z);
+        let name_ptr = w_name.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+        let expected_type = if expand_sz { REG_EXPAND_SZ } else { REG_SZ };
+
+        let mut reg_type: u32 = 0;
+        let mut bytes: u32 = (buf.len() * std::mem::size_of::<u16>()) as u32;
+        // SAFETY: Query single open `key` without re-opening `subkey`.
+        let mut status = unsafe {
+            RegGetValueW(
+                key,
+                std::ptr::null(),
+                name_ptr,
+                RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                &mut reg_type,
+                buf.as_mut_ptr() as *mut c_void,
+                &mut bytes,
+            )
+        };
+        if status == 234 {
+            // ERROR_MORE_DATA
+            buf.resize((bytes as usize).div_ceil(2), 0);
+            bytes = (buf.len() * std::mem::size_of::<u16>()) as u32;
+            status = unsafe {
+                RegGetValueW(
+                    key,
+                    std::ptr::null(),
+                    name_ptr,
+                    RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                    &mut reg_type,
+                    buf.as_mut_ptr() as *mut c_void,
+                    &mut bytes,
+                )
+            };
+        }
+        let matches = if status == 0 && reg_type == expected_type && bytes >= 2 {
+            let max_u16 = (bytes as usize / 2).min(buf.len());
+            let end = buf[..max_u16].iter().position(|&c| c == 0).unwrap_or(max_u16);
+            String::from_utf16_lossy(&buf[..end]) == desired
+        } else {
+            false
+        };
+        if matches {
+            return Ok(());
+        }
+
+        let w_data = wide_z(desired);
+        let byte_len = (w_data.len() * std::mem::size_of::<u16>()) as u32;
+        // SAFETY: `w_data` is NUL-terminated UTF-16 and `byte_len` matches its byte length.
+        let set = unsafe {
+            RegSetValueExW(
+                key,
+                name_ptr,
+                0,
+                expected_type,
+                w_data.as_ptr() as *const u8,
+                byte_len,
+            )
+        };
+        if set != 0 {
+            return Err(format!(
+                "RegSetValueExW({subkey}\\{}) failed with status={set}",
+                name_opt.unwrap_or("(Default)")
+            ));
+        }
+        *changed = true;
+        Ok(())
+    };
+
+    let res = (|| -> Result<(), String> {
+        sync_str(None, false, default_name, &mut buf, &mut changed)?;
+        for &(role, value) in pairs {
+            sync_str(Some(role), true, value, &mut buf, &mut changed)?;
+        }
+
+        let w_src = wide_z("Scheme Source");
+        let mut current_src: u32 = u32::MAX;
+        let mut src_bytes: u32 = std::mem::size_of::<u32>() as u32;
+        // SAFETY: Query `"Scheme Source"` DWORD from the open handle.
+        let q_src = unsafe {
+            RegGetValueW(
+                key,
+                std::ptr::null(),
+                w_src.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                &mut current_src as *mut u32 as *mut c_void,
+                &mut src_bytes,
+            )
+        };
+        if q_src != 0 || current_src != scheme_source {
+            // SAFETY: `&scheme_source` points to 4 valid bytes of `REG_DWORD`.
+            let set = unsafe {
+                RegSetValueExW(
+                    key,
+                    w_src.as_ptr(),
+                    0,
+                    REG_DWORD,
+                    &scheme_source as *const u32 as *const u8,
+                    std::mem::size_of::<u32>() as u32,
+                )
+            };
+            if set != 0 {
+                return Err(format!(
+                    "RegSetValueExW({subkey}\\Scheme Source) failed with status={set}"
+                ));
+            }
+            changed = true;
+        }
+        Ok(())
+    })();
+
+    // SAFETY: Close `key` handle unconditionally before propagating `res`.
+    unsafe {
+        RegCloseKey(key);
+    }
+    res?;
+    Ok(changed)
+}
+
 pub fn reg_set_dword(subkey: &str, value_name: &str, val: u32) -> Result<(), String> {
     const KEY_SET_VALUE: u32 = 0x0002;
     const REG_DWORD: u32 = 4;

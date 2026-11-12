@@ -1,12 +1,13 @@
 #![windows_subsystem = "windows"]
 
 use modern_inverted_cursor::{
-    app_paths, balanced_cursor_size, create_split_cursor_hicon, current_accessibility_step,
-    ensure_all_assets, is_startup_enabled, load_saved_preset, load_system_dll, parse_preset_arg,
-    perform_validated_restore, reg_delete_value, reg_get_string, reg_open_notify, reg_set_dword,
-    reg_set_string, save_preset, set_startup_enabled, stop_targeted_guardians, trim_working_set, wide_z, BoundedLogger, NamedReadyEvent, Preset,
-    RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION,
-    CONFIG_SUBKEY, CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
+    app_paths, app_paths_for_root, balanced_cursor_size, create_split_cursor_hicon,
+    current_accessibility_step, is_startup_enabled, load_saved_preset,
+    parse_preset_arg, perform_validated_restore, reg_delete_value, reg_get_string, reg_open_notify,
+    reg_set_dword, reg_set_string, save_preset, set_startup_enabled, stop_targeted_guardians,
+    trim_working_set, wide_z, AssetVerifyCache, BoundedLogger, NamedReadyEvent, Preset, RegCloseKey,
+    RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION, CONFIG_SUBKEY,
+    CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
     SETUP_EXE_NAME, TRAY_WND_CLASS,
 };
 
@@ -19,6 +20,8 @@ use std::{
 };
 
 const MUTEX_NAME: &str = "Local\\ModernInvertedCursorGuardian_V6_Mutex";
+const SANDBOX_MUTEX_NAME: &str = "Local\\ModernInvertedCursorGuardian_Sandbox_Mutex";
+const SANDBOX_WND_CLASS: &str = "ModernInvertedCursorGuardianSandboxWnd";
 const TRAY_ICON_ID: u32 = 1;
 
 const WM_DESTROY: u32 = 0x0002;
@@ -281,30 +284,32 @@ extern "system" {
     ) -> isize;
 }
 
-unsafe fn wts_session_notify(hwnd: *mut c_void, register: bool) {
+unsafe fn wts_session_notify(hwnd: *mut c_void, register: bool) -> bool {
     let lib_name = wide_z("wtsapi32.dll");
     if register {
-        let module = load_system_dll("wtsapi32.dll");
+        let module = modern_inverted_cursor::load_system_dll("wtsapi32.dll");
         if module.is_null() {
-            return;
+            return false;
         }
         type RegisterFn = unsafe extern "system" fn(*mut c_void, u32) -> i32;
         let proc = GetProcAddress(module, b"WTSRegisterSessionNotification\0".as_ptr());
         if !proc.is_null() {
             let f: RegisterFn = std::mem::transmute(proc);
-            let _ = f(hwnd, NOTIFY_FOR_THIS_SESSION);
+            return f(hwnd, NOTIFY_FOR_THIS_SESSION) != 0;
         }
+        false
     } else {
         let module = GetModuleHandleW(lib_name.as_ptr());
         if module.is_null() {
-            return;
+            return false;
         }
         type UnregisterFn = unsafe extern "system" fn(*mut c_void) -> i32;
         let proc = GetProcAddress(module, b"WTSUnRegisterSessionNotification\0".as_ptr());
         if !proc.is_null() {
             let f: UnregisterFn = std::mem::transmute(proc);
-            let _ = f(hwnd);
+            return f(hwnd) != 0;
         }
+        false
     }
 }
 
@@ -319,12 +324,15 @@ struct AppState {
     backup_path: PathBuf,
     guardian_exe: PathBuf,
     log: BoundedLogger,
+    asset_cache: AssetVerifyCache,
+    sandbox_mode: bool,
     icon_active: *mut c_void,
     icon_paused: *mut c_void,
     wm_taskbar_created: u32,
     menu_open: bool,
     tray_added: bool,
     tray_retries: u8,
+    last_tray_state: Option<(bool, Preset, u32, u32)>,
 }
 
 impl AppState {
@@ -356,6 +364,10 @@ impl AppState {
         if self.hwnd.is_null() {
             return;
         }
+        let tray_key = (self.paused, self.preset, self.last_px, self.last_step);
+        if prefer_modify && self.tray_added && self.last_tray_state == Some(tray_key) {
+            return;
+        }
         let message = if prefer_modify && self.tray_added {
             NIM_MODIFY
         } else {
@@ -377,6 +389,7 @@ impl AppState {
         if ok {
             self.tray_added = true;
             self.tray_retries = 0;
+            self.last_tray_state = Some(tray_key);
             unsafe {
                 KillTimer(self.hwnd, TIMER_TRAY_RETRY);
             }
@@ -388,16 +401,43 @@ impl AppState {
         }
     }
 
-    fn apply_now(&mut self) -> Result<(), String> {
-        if let Err(err) = ensure_all_assets(&self.install_dir, false, &self.log) {
+    fn apply_now(&mut self, force_full_hash: bool) -> Result<(), String> {
+        if let Err(err) = self
+            .asset_cache
+            .ensure_all_assets_cached(&self.install_dir, force_full_hash, &self.log)
+        {
             self.log.line(format!("[error] Asset check failed: {err}"));
             return Err(err);
+        }
+        if self.sandbox_mode {
+            let step = current_accessibility_step();
+            let px = balanced_cursor_size(step);
+            let (arrow, help, working) = self.preset.custom_files();
+            for req in [arrow, help, working] {
+                if !self.install_dir.join(req).is_file() {
+                    return Err(format!("Sandbox asset missing: {req}"));
+                }
+            }
+            let _ = std::fs::write(
+                self.root.join("sandbox-runtime.txt"),
+                format!(
+                    "pid={}\nversion={APP_VERSION}\npreset={}\nstep={step}\npx={px}\n",
+                    std::process::id(),
+                    self.preset.short_name()
+                ),
+            );
+            self.last_step = step;
+            self.last_px = px;
+            self.sync_tray(true);
+            trim_working_set();
+            return Ok(());
         }
         match modern_inverted_cursor::register_and_apply(self.preset, &self.install_dir, Some(&self.log)) {
             Ok((step, px)) => {
                 self.last_step = step;
                 self.last_px = px;
                 self.sync_tray(true);
+                trim_working_set();
                 Ok(())
             }
             Err(err) => {
@@ -566,7 +606,7 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
     match cmd {
         CMD_REAPPLY => {
             state.paused = false;
-            let _ = state.apply_now();
+            let _ = state.apply_now(true);
         }
         CMD_PAUSE => {
             state.paused = !state.paused;
@@ -576,7 +616,7 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
                 "Guardian resumed by user."
             });
             if !state.paused {
-                let _ = state.apply_now();
+                let _ = state.apply_now(false);
             } else {
                 state.sync_tray(true);
             }
@@ -591,13 +631,18 @@ fn handle_menu_action(hwnd: *mut c_void, cmd: usize) {
             };
             state.preset = next;
             state.paused = false;
-            let _ = save_preset(next);
-            if is_startup_enabled() {
-                let _ = set_startup_enabled(&state.guardian_exe, true);
+            if !state.sandbox_mode {
+                let _ = save_preset(next);
+                if is_startup_enabled() {
+                    let _ = set_startup_enabled(&state.guardian_exe, true);
+                }
             }
-            let _ = state.apply_now();
+            let _ = state.apply_now(false);
         }
         CMD_STARTUP => {
+            if state.sandbox_mode {
+                return;
+            }
             let next = !is_startup_enabled();
             if let Err(err) = set_startup_enabled(&state.guardian_exe, next) {
                 show_error_box(hwnd, &err);
@@ -677,7 +722,7 @@ unsafe extern "system" fn wnd_proc(
                 } else if ev == WM_LBUTTONDBLCLK {
                     let state = &mut *ptr;
                     state.paused = false;
-                    let _ = state.apply_now();
+                    let _ = state.apply_now(true);
                 }
                 return 0;
             }
@@ -705,19 +750,20 @@ unsafe extern "system" fn wnd_proc(
                 if !ptr_after.is_null() {
                     (*ptr_after).menu_open = false;
                 }
+                trim_working_set();
                 return 0;
             }
             WM_APP_REAPPLY => {
                 let state = &mut *ptr;
                 state.paused = false;
-                let _ = state.apply_now();
+                let _ = state.apply_now(false);
                 return 0;
             }
             WM_TIMER if w_param == TIMER_REAPPLY => {
                 KillTimer(hwnd, TIMER_REAPPLY);
                 let state = &mut *ptr;
                 if !state.paused {
-                    let _ = state.apply_now();
+                    let _ = state.apply_now(false);
                 }
                 return 0;
             }
@@ -744,7 +790,9 @@ unsafe extern "system" fn wnd_proc(
             WM_SETTINGCHANGE | WM_THEMECHANGED => {
                 if !(*ptr).paused {
                     let arrow_now = reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
-                    if !arrow_now.contains("ModernInvertedCursors") {
+                    if !arrow_now.contains("ModernInvertedCursors")
+                        || current_accessibility_step() != (*ptr).last_step
+                    {
                         SetTimer(hwnd, TIMER_REAPPLY, DEBOUNCE_MS, null_mut());
                     }
                 }
@@ -787,23 +835,50 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
     None
 }
 
+fn sandbox_arg(args: &[String]) -> Option<PathBuf> {
+    if let Some(val) = arg_value(args, "--sandbox") {
+        return Some(PathBuf::from(val));
+    }
+    if args.iter().any(|a| a == "--sandbox") {
+        return Some(env::temp_dir().join("mic-guardian-sandbox"));
+    }
+    None
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
-    let (root, install_dir, backup_path) = app_paths()?;
+    let sandbox_dir = sandbox_arg(&args);
+    let sandbox_mode = sandbox_dir.is_some();
+    let (root, install_dir, backup_path) = match sandbox_dir {
+        Some(dir) => app_paths_for_root(dir),
+        None => app_paths()?,
+    };
     let log = BoundedLogger::new(root.join("guardian.log"), false);
+    let mutex_name = if sandbox_mode { SANDBOX_MUTEX_NAME } else { MUTEX_NAME };
+    let wnd_class = if sandbox_mode { SANDBOX_WND_CLASS } else { TRAY_WND_CLASS };
 
     if args.iter().any(|a| a == "--quit") {
+        if sandbox_mode {
+            let w_cls = wide_z(SANDBOX_WND_CLASS);
+            let existing = unsafe { FindWindowW(w_cls.as_ptr(), null()) };
+            if !existing.is_null() {
+                unsafe {
+                    PostMessageW(existing, WM_CLOSE, 0, 0);
+                }
+            }
+            return Ok(());
+        }
         stop_targeted_guardians(&root, Some(&log))?;
         return Ok(());
     }
 
-    if args.iter().any(|a| a == "--replace") {
+    if args.iter().any(|a| a == "--replace") && !sandbox_mode {
         stop_targeted_guardians(&root, Some(&log))?;
     }
 
     let ready_event = arg_value(&args, "--ready-event");
 
-    let w_mutex = wide_z(MUTEX_NAME);
+    let w_mutex = wide_z(mutex_name);
     let mutex = unsafe { CreateMutexW(null_mut(), 0, w_mutex.as_ptr()) };
     if !mutex.is_null() && unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         unsafe {
@@ -812,7 +887,7 @@ fn run() -> Result<(), String> {
         if ready_event.is_some() {
             return Err("Another guardian instance remained active and blocked startup.".into());
         }
-        let w_cls = wide_z(TRAY_WND_CLASS);
+        let w_cls = wide_z(wnd_class);
         let existing = unsafe { FindWindowW(w_cls.as_ptr(), null()) };
         if !existing.is_null() {
             unsafe {
@@ -824,10 +899,18 @@ fn run() -> Result<(), String> {
 
     let preset = match parse_preset_arg(&args)? {
         Some(p) => {
-            let _ = save_preset(p);
+            if !sandbox_mode {
+                let _ = save_preset(p);
+            }
             p
         }
-        None => load_saved_preset(),
+        None => {
+            if sandbox_mode {
+                Preset::Compact
+            } else {
+                load_saved_preset()
+            }
+        }
     };
 
     let current_exe = env::current_exe().unwrap_or_else(|_| root.join(GUARDIAN_EXE_NAME));
@@ -845,7 +928,7 @@ fn run() -> Result<(), String> {
     }
 
     let h_inst = unsafe { GetModuleHandleW(null()) };
-    let w_cls = wide_z(TRAY_WND_CLASS);
+    let w_cls = wide_z(wnd_class);
     let wc = WndClassExW {
         cb_size: std::mem::size_of::<WndClassExW>() as u32,
         style: 0,
@@ -907,24 +990,28 @@ fn run() -> Result<(), String> {
         backup_path,
         guardian_exe: current_exe,
         log,
+        asset_cache: AssetVerifyCache::new(),
+        sandbox_mode,
         icon_active: create_split_cursor_hicon(32, Preset::Regular, false),
         icon_paused: create_split_cursor_hicon(32, Preset::Regular, true),
         wm_taskbar_created,
         menu_open: false,
         tray_added: false,
         tray_retries: 0,
+        last_tray_state: None,
     }));
 
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
-        wts_session_notify(hwnd, true);
+        let _wts_registered = wts_session_notify(hwnd, true);
         (*state_ptr).log.line(format!(
-            "Guardian v{APP_VERSION} started in tray mode (preset={}, size={}px).",
+            "Guardian v{APP_VERSION} started in {} mode (preset={}, size={}px).",
+            if sandbox_mode { "sandbox" } else { "tray" },
             (*state_ptr).preset.short_name(),
             (*state_ptr).last_px
         ));
         (*state_ptr).sync_tray(false);
-        let init_res = (*state_ptr).apply_now();
+        let init_res = (*state_ptr).apply_now(true);
         if let Err(err) = init_res {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             DestroyWindow(hwnd);
@@ -943,12 +1030,14 @@ fn run() -> Result<(), String> {
             }
             return Err(format!("Guardian initial cursor application failed: {err}"));
         }
-        let _ = reg_set_string(CONFIG_SUBKEY, Some("RuntimeVersion"), false, APP_VERSION);
-        let _ = reg_set_dword(
-            CONFIG_SUBKEY,
-            "RuntimePid",
-            std::process::id(),
-        );
+        if !sandbox_mode {
+            let _ = reg_set_string(CONFIG_SUBKEY, Some("RuntimeVersion"), false, APP_VERSION);
+            let _ = reg_set_dword(
+                CONFIG_SUBKEY,
+                "RuntimePid",
+                std::process::id(),
+            );
+        }
         if let Some(ev_name) = ready_event.as_deref() {
             NamedReadyEvent::signal_by_name(ev_name)?;
         }

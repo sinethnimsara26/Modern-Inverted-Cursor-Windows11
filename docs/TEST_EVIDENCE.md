@@ -60,3 +60,16 @@ Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated
   - `test_is_safe_cleanup_target_allows_only_expected_executables` (safe self-delete target gating)
   - `build.rs` fail-closed check verified: `cargo build --release` panicked on nonexistent `GUARDIAN_EMBED_PATH` instead of embedding an empty payload.
 - **PE Import Table Audit (`dumpbin /IMPORTS`):** Verified `win7-win10-x64` and `win7-win10-x86` import only `KERNEL32.dll`, `USER32.dll`, `GDI32.dll`, `SHELL32.dll`, `ADVAPI32.dll`, `bcrypt.dll`, and `ntdll.dll` (zero `VCRUNTIME140.dll`, zero `api-ms-win-crt-*`, zero `api-ms-win-core-synch-*`).
+
+---
+
+## Batch 05 Test Evidence (`v1.1.0-rc.1` Guardian Optimization)
+
+- **`x64` (`1.99.0`):** `build.ps1 -Arch x64 -Suffix x64` -> **`24/24 PASSED`** (`18` lib + `1` guardian + `5` setup).
+  - Setup `692,224 B`, Guardian `307,200 B`.
+- **`win7-win10-x64` (`1.75.0`):** `build.ps1 -Arch win7-win10-x64 -Toolchain 1.75.0 -Target x86_64-pc-windows-msvc -Suffix win7-win10-x64 -StaticCrt` -> **`24/24 PASSED`**.
+- **`win7-win10-x86` (`1.75.0`):** `build.ps1 -Arch win7-win10-x86 -Toolchain 1.75.0 -Target i686-pc-windows-msvc -Suffix win7-win10-x86 -StaticCrt` -> **`24/24 PASSED`** (Setup `814,080 B`, Guardian `372,224 B`).
+- **Batch 05 Regression Tests Added:**
+  - `test_reg_sync_cursor_values_opens_once_and_elides_noop_writes`
+  - `test_asset_verify_cache_skips_rehash_and_detects_tamper`
+- **Live Sandbox Guardian Smoke Test:** Started `ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe --tray --sandbox <scratch> --compact`, verified tray readiness (`sandbox-runtime.txt`), measured `0.75 MB` WS / `116` Handles, cleanly stopped via `--quit --sandbox`, and confirmed existing user `PID 9072` remained alive and untouched.

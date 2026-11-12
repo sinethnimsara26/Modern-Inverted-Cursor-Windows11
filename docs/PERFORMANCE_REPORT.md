@@ -29,4 +29,17 @@
   - Batch 04 `v1.1.0-rc.1` (WITH full SHA-1 verification on every asset): warm median improved to **`52.1 ms`** despite stricter cryptographic verification.
 - **Measured Cold Network Install (3 trials under local ISP TLS variability):** `39,172.6 ms`, `1,422.5 ms`, `15,122.6 ms` (note: cold HTTPS handshakes to `raw.githubusercontent.com` from this network varied between `1.4s` and `11.6s+` per connect attempt during testing).
 
-*(Guardians and Installer GUI optimizations will be measured and populated in Batches 05–07.)*
+### Batch 05 — Guardian Hot-Path Reapply, Registry Elision & Idle Footprint Optimization
+- **Changes:**
+  - `AssetVerifyCache::ensure_all_assets_cached`: keeps full cryptographic Git-blob SHA-1 verification on startup/drift/manual reapply (`force_full_hash=true`), while hot reapplies verify in-process `(byte_len, mtime_secs, mtime_nanos)` stamps before touching file contents.
+  - `reg_sync_cursor_values`: opens `HKCU\Control Panel\Cursors` once instead of 19 separate `RegCreateKeyExW`/`RegCloseKey` pairs and elides writes when values already match verbatim; elided redundant pre-`SetSystemCursor` `SPI_SETCURSORS` disk cursor reload inside `register_and_apply()`.
+  - `guardian.rs`: skips redundant `Shell_NotifyIconW(NIM_MODIFY)` when `(paused, preset, px, step)` is unchanged; calls `trim_working_set()` after `apply_now()` and popup menu dismissal; added isolated `--sandbox <dir>` mode.
+- **Measured Before vs After (`x64` release microbench, 5 trials of 50 iterations each):**
+  - `ensure_all_assets` (`x50` calls): `406.578 ms` median (`8.132 ms/call`) -> **`104.351 ms` median (`2.087 ms/call`)** (**3.90x faster**, zero disk reads on cache hit).
+  - Registry cursor scheme sync (`x50` calls): `32.009 ms` median (`0.640 ms/call` for 19 separate writes; `38.631 ms` / `0.773 ms` for 19 naive reads) -> **`8.594 ms` median (`0.172 ms/call`)** single-HKEY diff-check (**3.72x faster**, zero writes on match).
+- **Live Isolated Guardian Process Telemetry (`ModernInvertedCursors-Guardian-v1.1.0-rc.1-x64.exe --tray --sandbox`, vs Baseline Live `v1.0.0` `PID 9072`):**
+  - Baseline `v1.0.0` (`PID 9072`): `2.01 MB` WS (`2,109,440 B`), `1.36 MB` Private (`1,429,504 B`), `122` Handles.
+  - Batch 05 Sandbox Guardian (`PID 9040`, 3s idle): **`0.75 MB` WS (`782,336 B`, -62.9%)**, `1.52 MB` Private (`1,593,344 B`), **`116` Handles (-6)**, `4` Threads.
+  - Sandbox startup-to-ready latency: First cold AV-scan run `3,108.1 ms`; subsequent 3 warm launches **`233.9 ms`, `66.1 ms`, `71.0 ms` (median `71.0 ms`)**.
+
+*(Setup GUI optimizations will be measured and populated in Batches 06–07.)*

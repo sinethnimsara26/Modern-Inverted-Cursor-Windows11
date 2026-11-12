@@ -1,6 +1,6 @@
 use crate::registry::{
-    reg_get_dword, reg_set_dword, reg_set_string, trim_working_set, wide_z, BoundedLogger, Preset,
-    ACCESSIBILITY_SUBKEY, CURSORS_SUBKEY, SCHEMES_SUBKEY,
+    reg_get_dword, reg_get_string, reg_set_string, reg_sync_cursor_values, trim_working_set,
+    wide_z, BoundedLogger, Preset, ACCESSIBILITY_SUBKEY, CURSORS_SUBKEY, SCHEMES_SUBKEY,
 };
 use std::{
     env,
@@ -216,18 +216,21 @@ pub fn register_and_apply(
         }
     }
 
-    // Phase 2: Persist cursor scheme in HKCU once all assets loaded cleanly.
+    // Phase 2: Synchronize HKCU scheme & cursor values once (opening `CURSORS_SUBKEY` once and
+    // eliding writes that already match verbatim).
     let scheme_string = values.join(",");
-    reg_set_string(SCHEMES_SUBKEY, Some(preset.name()), true, &scheme_string)?;
-    reg_set_string(CURSORS_SUBKEY, None, false, preset.name())?;
-    for (role, value) in ROLES.iter().zip(values.iter()) {
-        reg_set_string(CURSORS_SUBKEY, Some(role), true, value)?;
+    if reg_get_string(SCHEMES_SUBKEY, Some(preset.name())).as_deref() != Some(scheme_string.as_str()) {
+        reg_set_string(SCHEMES_SUBKEY, Some(preset.name()), true, &scheme_string)?;
     }
-    reg_set_dword(CURSORS_SUBKEY, "Scheme Source", 0)?;
+    let pairs: Vec<(&str, &str)> = ROLES
+        .iter()
+        .copied()
+        .zip(values.iter().map(String::as_str))
+        .collect();
+    let _ = reg_sync_cursor_values(CURSORS_SUBKEY, preset.name(), &pairs, 0)?;
 
-    let _ = reload_cursors();
-
-    // Phase 3: Atomically swap loaded handles; roll back with `reload_cursors()` if a required swap fails.
+    // Phase 3: Atomically swap loaded handles directly without a redundant pre-load `SPI_SETCURSORS`
+    // pass; only roll back with `reload_cursors()` if a required swap fails.
     for idx in 0..loaded.len() {
         let (label, id, optional, handle) = loaded[idx];
         // SAFETY: `SetSystemCursor` destroys `handle` on success; on failure we free remaining handles cleanly.

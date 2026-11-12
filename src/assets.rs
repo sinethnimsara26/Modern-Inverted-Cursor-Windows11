@@ -10,7 +10,7 @@ use std::{
         OnceLock,
     },
     thread,
-    time::Duration,
+    time::{Duration, UNIX_EPOCH},
 };
 
 pub const REPO_RAW: &str =
@@ -532,6 +532,75 @@ fn download_with_session(
 
 pub fn download_asset(asset: Asset, dir: &Path, log: Option<&BoundedLogger>) -> Result<(), String> {
     download_with_session(asset, dir, log, None)
+}
+
+/// In-process `(byte_len, mtime_secs, mtime_nanos)` fingerprint table populated after a full
+/// cryptographic Git-blob SHA-1 verification pass so hot Guardian reapplies avoid re-reading
+/// unmodified cursor files from disk.
+#[derive(Default)]
+pub struct AssetVerifyCache {
+    entries: Option<[(u64, u64, u32); 32]>,
+}
+
+fn asset_stat(path: &Path) -> Option<(u64, u64, u32)> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some((meta.len(), modified.as_secs(), modified.subsec_nanos()))
+}
+
+impl AssetVerifyCache {
+    pub fn new() -> Self {
+        Self { entries: None }
+    }
+
+    pub fn invalidate(&mut self) {
+        self.entries = None;
+    }
+
+    /// Returns true iff the cache is populated and every one of the 32 asset paths currently
+    /// on disk matches the expected byte size and cached modification timestamp.
+    pub fn fast_stat_check(&self, dir: &Path) -> bool {
+        let Some(cached) = &self.entries else {
+            return false;
+        };
+        ASSETS.iter().zip(cached.iter()).all(|(asset, &stamp)| {
+            matches!(asset_stat(&dir.join(asset.name)), Some(cur) if cur.0 == asset.size && cur == stamp)
+        })
+    }
+
+    /// Ensures every asset exists and matches either the cached verified metadata stamp or a full
+    /// cryptographic Git-blob SHA-1 check. When `force_full_hash` is true or any `(len, mtime)`
+    /// differs from the cache, performs full SHA-1 verification and refreshes the cache.
+    pub fn ensure_all_assets_cached(
+        &mut self,
+        dir: &Path,
+        force_full_hash: bool,
+        log: &BoundedLogger,
+    ) -> Result<(), String> {
+        if !force_full_hash && self.fast_stat_check(dir) {
+            return Ok(());
+        }
+
+        ensure_all_assets(dir, true, log)?;
+        self.populate_stamps(dir);
+        Ok(())
+    }
+
+    /// Populates metadata stamps from `dir` (only valid after SHA-1 verification).
+    pub fn populate_stamps(&mut self, dir: &Path) {
+        let mut next = [(0u64, 0u64, 0u32); 32];
+        let mut complete = true;
+        for (idx, asset) in ASSETS.iter().enumerate() {
+            match asset_stat(&dir.join(asset.name)) {
+                Some(stamp) if stamp.0 == asset.size => next[idx] = stamp,
+                _ => {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        self.entries = if complete { Some(next) } else { None };
+    }
 }
 
 /// Ensures every asset exists on disk and passes full Git blob SHA-1 + byte-size verification

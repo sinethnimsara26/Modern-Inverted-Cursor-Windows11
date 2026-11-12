@@ -9,7 +9,7 @@ pub mod render;
 
 pub use assets::{
     download_asset, ensure_all_assets, git_blob_sha1, parse_https_url, prepare_assets_parallel,
-    sha1, verify_asset_file, Asset, ASSETS, MAX_ASSET_BYTES, REPO_RAW,
+    sha1, verify_asset_file, Asset, AssetVerifyCache, ASSETS, MAX_ASSET_BYTES, REPO_RAW,
 };
 pub use backup::{
     export_backup, parse_reg_file_text, perform_validated_restore, reset_windows_default_cursors,
@@ -29,13 +29,13 @@ pub use registry::{
     app_paths, app_paths_for_root, cleanup_legacy_guardian_binary, detect_existing_installation,
     hkcu, is_startup_enabled, load_saved_preset, load_system_dll, parse_preset_arg,
     reg_delete_subkey, reg_delete_value, reg_get_dword, reg_get_string, reg_open_notify,
-    reg_set_dword, reg_set_string, register_uninstall_entry, save_preset, set_startup_enabled,
-    trim_working_set, unregister_uninstall_entry, wide_z, BoundedLogger, InstallDetection, Preset,
-    RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_SUBKEY, APP_VERSION, CONFIG_SUBKEY,
-    CREATE_NO_WINDOW, CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE,
-    LEGACY_GUARDIAN_EXE_NAME, LEGACY_GUARDIAN_RUN_VALUE, PACK_VERSION, PUBLISHER, RUN_SUBKEY,
-    SCHEMES_SUBKEY, SETUP_EXE_NAME, TRAY_WND_CLASS, UNINSTALL_KEY_NAME, UNINSTALL_PARENT_SUBKEY,
-    UNINSTALL_SUBKEY,
+    reg_set_dword, reg_set_string, reg_sync_cursor_values, register_uninstall_entry, save_preset,
+    set_startup_enabled, trim_working_set, unregister_uninstall_entry, wide_z, BoundedLogger,
+    InstallDetection, Preset, RegCloseKey, RegNotifyChangeKeyValue, ACCESSIBILITY_SUBKEY,
+    APP_VERSION, CONFIG_SUBKEY, CREATE_NO_WINDOW, CURSORS_SUBKEY, GUARDIAN_EXE_NAME,
+    GUARDIAN_RUN_VALUE, LEGACY_GUARDIAN_EXE_NAME, LEGACY_GUARDIAN_RUN_VALUE, PACK_VERSION,
+    PUBLISHER, RUN_SUBKEY, SCHEMES_SUBKEY, SETUP_EXE_NAME, TRAY_WND_CLASS, UNINSTALL_KEY_NAME,
+    UNINSTALL_PARENT_SUBKEY, UNINSTALL_SUBKEY,
 };
 pub use render::{create_split_cursor_hicon, draw_cursor_glyph, DestroyCursor};
 
@@ -280,5 +280,53 @@ mod tests {
         let _ = fs::remove_dir_all(&missing_dir);
         let err = register_and_apply(Preset::Compact, &missing_dir, None).unwrap_err();
         assert!(err.contains("LoadImageW failed"));
+    }
+
+    #[test]
+    fn test_reg_sync_cursor_values_opens_once_and_elides_noop_writes() {
+        let parent = r"Software\ModernInvertedCursors";
+        let child = "UnitTestRegSync";
+        let subkey = r"Software\ModernInvertedCursors\UnitTestRegSync";
+        reg_delete_subkey(parent, child);
+        let pairs: Vec<(&str, &str)> = ROLES
+            .iter()
+            .copied()
+            .map(|r| (r, r"C:\NonExistent\arrow.cur"))
+            .collect();
+
+        assert!(reg_sync_cursor_values(subkey, "Modern Inverted Test", &pairs, 0).unwrap());
+        assert!(!reg_sync_cursor_values(subkey, "Modern Inverted Test", &pairs, 0).unwrap());
+
+        let mut modified = pairs.clone();
+        modified[0] = ("Arrow", r"C:\NonExistent\arrow_no_tail.cur");
+        assert!(reg_sync_cursor_values(subkey, "Modern Inverted Test", &modified, 0).unwrap());
+        assert!(!reg_sync_cursor_values(subkey, "Modern Inverted Test", &modified, 0).unwrap());
+
+        reg_delete_subkey(parent, child);
+    }
+
+    #[test]
+    fn test_asset_verify_cache_skips_rehash_and_detects_tamper() {
+        let tmp = env::temp_dir().join("mic-test-asset-cache");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let mut cache = AssetVerifyCache::new();
+        assert!(!cache.fast_stat_check(&tmp));
+
+        for asset in ASSETS {
+            fs::write(tmp.join(asset.name), vec![0x55u8; asset.size as usize]).unwrap();
+        }
+        cache.populate_stamps(&tmp);
+        assert!(cache.fast_stat_check(&tmp));
+
+        // Corrupting size or deleting an asset immediately misses the stat cache.
+        fs::write(tmp.join(ASSETS[0].name), vec![0x55u8; (ASSETS[0].size as usize) + 1]).unwrap();
+        assert!(!cache.fast_stat_check(&tmp));
+
+        // Restoring byte size with wrong contents still fails cryptographic SHA-1 check cleanly.
+        fs::write(tmp.join(ASSETS[0].name), vec![0x55u8; ASSETS[0].size as usize]).unwrap();
+        let err = verify_asset_file(ASSETS[0], &tmp.join(ASSETS[0].name)).unwrap_err();
+        assert!(err.contains("Git blob SHA-1 check"));
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

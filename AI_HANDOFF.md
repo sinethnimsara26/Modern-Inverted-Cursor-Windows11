@@ -14,9 +14,9 @@
 | **Batch 01** | Baseline audit, research, benchmarks & docs scaffolding | **DONE** | `fa421bb` |
 | **Batch 02** | Critical installation readiness, safe restore/uninstall, silent error propagation & targeted guardian IPC | **DONE** | `80f8341` |
 | **Batch 03** | Clean Setup / Guardian separation, module refactor, migration & `ModernInvertedCursors-*` naming | **DONE** | `070e4a6` |
-| **Batch 04** | Security, `build.rs` fail-closed gate, WinHTTP timeouts/size-caps/session reuse, System32 DLL pinning & atomic apply | **DONE** | *(pending commit)* |
-| **Batch 05** | Guardian memory, handle, GDI & CPU wakeup optimization | **IN PROGRESS** | — |
-| **Batch 06** | Setup UI dirty-region / static-surface caching, timer stop-when-idle & DPI/keyboard accessibility | **PENDING** | — |
+| **Batch 04** | Security, `build.rs` fail-closed gate, WinHTTP timeouts/size-caps/session reuse, System32 DLL pinning & atomic apply | **DONE** | `2b5c067` |
+| **Batch 05** | Guardian memory, handle, GDI & CPU wakeup optimization | **DONE** | *(pending commit)* |
+| **Batch 06** | Setup UI dirty-region / static-surface caching, timer stop-when-idle & DPI/keyboard accessibility | **IN PROGRESS** | — |
 | **Batch 07** | Comprehensive unit, integration, UI Automation interaction, multi-DPI (`100–200%`) & failure-injection tests | **PENDING** | — |
 | **Batch 08** | Final regression audit, CI green verification across all 4 targets, draft PR & `v1.1.0-rc.1` | **PENDING** | — |
 
@@ -32,4 +32,4 @@
   - Startup `HKCU\...\Run\ModernInvertedCursorGuardian` enabled
 
 ## Immediate Next Action
-Complete Batch 04 verification + commit, then proceed to **Batch 05** (Guardian startup latency, verified `(len, mtime)` metadata cache, registry diff-elision, working-set trim, handle audit & multi-trial benchmarking).
+Proceed to **Batch 06** (`src/bin/setup/ui.rs` static preset-cursor glyph caching, dirty-only `WM_PAINT` `BitBlt`, stop `TIMER_ANIM` when settled, working-set trim, and full `Tab`/`Arrow`/`Space`/`Enter` keyboard navigation + focus ring).

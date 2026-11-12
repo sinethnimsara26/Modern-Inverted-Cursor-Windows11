@@ -81,3 +81,17 @@ Confirmed 14 distinct defects across baseline (`BUG-01` through `BUG-14`), inclu
    - `build.rs` fail-closed test confirmed panic on invalid `GUARDIAN_EMBED_PATH`.
    - Warm `--sandbox` improved from `70.7 ms` baseline to `52.1 ms` median (`53.8, 52.1, 51.5 ms`).
    - `22/22` unit & integration tests passed across modern `x64` (`1.99.0`), legacy `x64` (`1.75.0`), and legacy `x86` (`1.75.0`).
+
+---
+
+## Batch 05 — Guardian Memory, Handle & Hot-Path Optimization
+
+1. **Changes Implemented:**
+   - Added `AssetVerifyCache` in `src/assets.rs`: preserves full Git blob SHA-1 verification at startup and on manual/drift checks, while fast-stat checking `(len, mtime)` in process during hot reapplies.
+   - Added `reg_sync_cursor_values()` in `src/registry.rs`: opens `HKCU\Control Panel\Cursors` once instead of 19 separate key opens and elides registry writes when unchanged; removed redundant pre-`SetSystemCursor` `SPI_SETCURSORS` reload inside `src/cursors.rs::register_and_apply()`.
+   - Updated `src/bin/guardian.rs`: added tray state diff-elision (`last_tray_state`), `trim_working_set()` after `apply_now()` and popup menu close, accessibility step change detection inside `WM_SETTINGCHANGE`, and isolated `--sandbox <dir>` mode for safe live process testing.
+2. **Measured Improvements & Tests:**
+   - Asset reapply check (`x50` calls): `406.58 ms` -> **`104.35 ms` median** (**3.90x faster**).
+   - Registry sync (`x50` calls): `32.01 ms` -> **`8.59 ms` median** (**3.72x faster**, 0 writes on match).
+   - Sandbox tray Guardian (`PID 9040` vs live `v1.0.0` `PID 9072`): **`0.75 MB` WS (-62.9%)**, **`116` Handles (-6)**, `71.0 ms` warm startup median (`233.9, 66.1, 71.0 ms`).
+   - Added 2 unit tests (`test_reg_sync_cursor_values_opens_once_and_elides_noop_writes`, `test_asset_verify_cache_skips_rehash_and_detects_tamper`); **`24/24 PASSED`** across `x64`, `win7-win10-x64`, and `win7-win10-x86`.
