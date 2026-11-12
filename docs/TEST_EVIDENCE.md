@@ -113,3 +113,4 @@ Records exact commands, commit SHAs, tool outputs, and CI links. Zero fabricated
   - `win7-win10-x64` (`1.75.0 +crt-static`): **`30/30 PASSED`** (`Setup 924,672 B`, `Guardian 420,864 B`)
   - `win7-win10-x86` (`1.75.0 +crt-static`): **`30/30 PASSED`** (`Setup 820,736 B`, `Guardian 374,272 B`)
 - `dumpbin /IMPORTS` audit on final legacy `win7-win10-x64` & `win7-win10-x86`: ONLY `ADVAPI32.dll`, `bcrypt.dll`, `GDI32.dll`, `KERNEL32.dll`, `ntdll.dll`, `SHELL32.dll`, `USER32.dll`.
+- **GitHub Actions 4-Target CI Run [`#43233586021`](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/actions/runs/43233586021):** ALL 4 jobs passed (`Build & Test (x64)` `1m24s` incl. `fmt` + `clippy`, `Build & Test (arm64)` `1m28s` on `windows-11-arm`, `Build & Test (win7-win10-x64)` `1m49s`, `Build & Test (win7-win10-x86)` `2m25s`).

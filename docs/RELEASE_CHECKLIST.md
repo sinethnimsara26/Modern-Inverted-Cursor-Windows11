@@ -10,10 +10,10 @@ All 15 mandatory acceptance gates prior to user sign-off for stable release:
 - [x] **Gate 6:** Bounded startup readiness handshake + rollback on failure; `--silent` exits non-zero cleanly with zero blocking `MessageBoxW`.
 - [x] **Gate 7:** Zero indiscriminate `taskkill /IM`; PID + executable path verified shutdown only.
 - [x] **Gate 8:** Unit, integration, backup/restore, IPC failure-injection, and endurance tests passing cleanly (`cargo fmt --check`, `cargo clippy -- -D warnings`, `30/30` tests per local target).
-- [ ] **Gate 9:** Genuine Windows CI green across Modern `x64`, Native `ARM64`, Legacy `win7-win10-x64`, and Legacy `win7-win10-x86` (including PE + import audits). *(Awaiting remote CI completion on `hardening/v1.1.0-audit` push.)*
+- [x] **Gate 9:** Genuine Windows CI green across Modern `x64`, Native `ARM64`, Legacy `win7-win10-x64`, and Legacy `win7-win10-x86` (including PE + import audits — verified on run `#43233586021`).
 - [x] **Gate 10:** Real GUI interactive flows + visual inspection at `100%`, `125%`, `150%`, and `200%` DPI scaling verified.
 - [x] **Gate 11:** Multi-trial before/after resource & latency benchmarks recorded with no unexplained regressions.
 - [x] **Gate 12:** Security findings resolved or accurately documented and accepted (`SEC-01`..`SEC-08`).
 - [x] **Gate 13:** Consistently named artifacts with verified `SHA256SUMS.txt`.
 - [x] **Gate 14:** User docs (`README.md`, post-usage, CLI/upgrade instructions) match exact code & CI facts.
-- [ ] **Gate 15:** Draft PR & Release Candidate `v1.1.0-rc.1` prepared without merging to `main` or publishing final release. *(Will complete upon CI pass.)*
+- [x] **Gate 15:** Draft PR & Release Candidate `v1.1.0-rc.1` prepared on `hardening/v1.1.0-audit` without merging to `main` or altering stable `v1.0.x` releases.

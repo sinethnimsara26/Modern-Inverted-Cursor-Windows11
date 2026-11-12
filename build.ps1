@@ -82,13 +82,13 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Setup build failed." }
     Copy-Item (Join-Path $TargetRoot "$TargetSubdir\ModernInvertedCursors-Setup.exe") $SetupOut -Force
 
-    # Keep dist clean of superseded setup/guardian versioned filenames for this suffix
-    Get-ChildItem $Dist -Filter "ModernInverted*Setup-*-$Suffix.exe" |
-        Where-Object FullName -ne $SetupOut |
-        Remove-Item -Force
-    Get-ChildItem $Dist -Filter "ModernInverted*Guardian-v*-$Suffix.exe" |
-        Where-Object FullName -ne $GuardianOut |
-        Remove-Item -Force
+    # Keep dist clean of superseded setup/guardian versioned filenames for this exact suffix
+    Get-ChildItem $Dist -Filter "*.exe" | Where-Object {
+        $_.FullName -ne $SetupOut -and $_.Name -match "^ModernInverted(?:Cursors-)?Setup(?:-v[^-]+)?-$([regex]::Escape($Suffix))\.exe$"
+    } | Remove-Item -Force
+    Get-ChildItem $Dist -Filter "*.exe" | Where-Object {
+        $_.FullName -ne $GuardianOut -and $_.Name -match "^ModernInverted(?:Cursors-)?Cursor?Guardian-v[^-]+-$([regex]::Escape($Suffix))\.exe$"
+    } | Remove-Item -Force
     Get-ChildItem $Dist -Filter "ModernInvertedSetup-v*.exe" |
         Where-Object { $_.FullName -ne $SetupOut } |
         Remove-Item -Force
