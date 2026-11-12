@@ -52,13 +52,15 @@ Windows `TrackPopupMenuEx` and `MessageBoxW` run nested modal message loops that
 
 ### Upstream Verification & Parallel Setup Download
 - All 32 cursor files from `emvaized/modern_inverted_mouse_cursors` (`v3.6.2`) are pinned by exact byte size and Git blob SHA-1 (`SHA1("blob " + len + "\0" + bytes)`), implemented in pure Rust (`sha1()` / `git_blob_sha1()`).
-- `prepare_assets_parallel` spawns up to 4 worker threads inside `std::thread::scope` using Windows' built-in `curl.exe` (`CREATE_NO_WINDOW`) when files are missing, streaming live `[done/32]` updates to the GUI progress bar.
+- `download_asset` connects directly via **WinHTTP** (`winhttp.dll` loaded dynamically with TLS 1.2 enabled — falling back to `WINHTTP_ACCESS_TYPE_DEFAULT_PROXY` on Windows 7/8 and falling back to `curl.exe` only if WinHTTP fails) inside `prepare_assets_parallel`'s 4-worker `std::thread::scope`, removing any reliance on Windows 10 1803+ `curl.exe`.
 
 ---
 
-## 4. Dark-Mode GUI Installer (`src/bin/setup.rs`)
+## 4. Dark-Mode GUI Installer (`src/bin/setup.rs`) & Legacy Windows 7–10 Support
 
-- **Native Dark Window Chrome:** Uses `DwmSetWindowAttribute` for immersive dark title bar (`20`), rounded corners (`33 = DWMWCP_ROUND`), and subtle `#2B313D` border tint (`34`).
-- **Per-Monitor DPI V2:** Calls `SetProcessDpiAwarenessContext(-4)` and scales every layout rectangle, corner radius, glyph size, and `Segoe UI` ClearType font dynamically via `GetDpiForWindow` and `WM_DPICHANGED`.
+- **Native Dark Window Chrome:** Uses `DwmSetWindowAttribute` for immersive dark title bar (`20`, with Windows 10 1809–1909 fallback `19`), rounded corners (`33 = DWMWCP_ROUND` on Win11), and subtle `#2B313D` border tint (`34`); Windows 7/8 ignore unsupported DWM attributes cleanly while preserving the full dark client area.
+- **Vista through Windows 11 DPI Scaling:** Tries `SetProcessDpiAwarenessContext(-4)` (Win10 1703+), falls back to `shcore.dll` `SetProcessDpiAwareness(2)` (Win8.1+), then `SetProcessDPIAware()` (Vista/Win7/Win8). `window_dpi` uses `GetDpiForWindow` with a `GetDC` + `GetDeviceCaps(LOGPIXELSX)` fallback.
+- **Windows 7 SP1 – Windows 10 Legacy Builds (`1.75.0` + `+crt-static`):** Modern Rust (`1.78+`) statically links Windows 10 synchronization/CRT primitives (`api-ms-win-core-synch-l1-2-0.dll`, `VCRUNTIME140.dll`, `api-ms-win-crt-*`). Legacy release builds compile with **Rust `1.75.0`** and `-C target-feature=+crt-static` for both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`, statically embedding the C runtime and importing only built-in Win7+ OS DLLs (`KERNEL32`, `USER32`, `ADVAPI32`, `GDI32`, `SHELL32`, `bcrypt.dll`, `ntdll.dll`).
+- **32-bit Installer Manifest & Theme Resilience:** Embeds an explicit `<requestedExecutionLevel level="asInvoker"/>` + Win7–Win11 `<supportedOS>` manifest so Windows never misclassifies the 32-bit setup executable as an admin UAC installer; guardian also monitors `WM_SETTINGCHANGE` / `WM_THEMECHANGED` and falls back to `GetSystemMetrics(SM_CXCURSOR)` when `Accessibility\CursorSize` does not exist.
 - **Anti-Aliased Custom Vector & SDF Rendering:** Renders rounded cards, borders, toggles, progress bar, step checkmarks, and 4 distinct cursor preset previews via 4×4 supersampling and signed-distance-field (`sdf_round_box`) coverage into a 32-bit `CreateDIBSection` backbuffer before compositing GDI ClearType text and blitting (`BitBlt`) with zero flicker (`WM_ERASEBKGND => 1`).
-- **Clean Windows Integration:** Registers `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\ModernInvertedCursors` so users can repair/uninstall cleanly from **Windows Settings → Apps → Installed apps** without needing administrator privileges.
+- **Clean Windows Integration:** Registers `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\ModernInvertedCursors` so users can repair/uninstall cleanly from **Apps / Programs and Features** without needing administrator privileges.

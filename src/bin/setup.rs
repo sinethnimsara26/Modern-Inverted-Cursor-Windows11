@@ -210,8 +210,14 @@ extern "system" {
     fn EndPaint(h_wnd: *mut c_void, lp_paint: *const PaintStruct) -> i32;
     fn GetDC(h_wnd: *mut c_void) -> *mut c_void;
     fn ReleaseDC(h_wnd: *mut c_void, h_dc: *mut c_void) -> i32;
+    #[cfg(target_pointer_width = "64")]
     fn SetWindowLongPtrW(h_wnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize;
+    #[cfg(target_pointer_width = "64")]
     fn GetWindowLongPtrW(h_wnd: *mut c_void, n_index: i32) -> isize;
+    #[cfg(target_pointer_width = "32")]
+    fn SetWindowLongW(h_wnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize;
+    #[cfg(target_pointer_width = "32")]
+    fn GetWindowLongW(h_wnd: *mut c_void, n_index: i32) -> isize;
     fn SetWindowPos(
         h_wnd: *mut c_void,
         h_wnd_insert_after: *mut c_void,
@@ -248,6 +254,20 @@ extern "system" {
         lp_caption: *const u16,
         u_type: u32,
     ) -> i32;
+}
+
+#[cfg(target_pointer_width = "32")]
+#[allow(non_snake_case)]
+#[inline]
+unsafe fn SetWindowLongPtrW(h_wnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize {
+    SetWindowLongW(h_wnd, n_index, dw_new_long)
+}
+
+#[cfg(target_pointer_width = "32")]
+#[allow(non_snake_case)]
+#[inline]
+unsafe fn GetWindowLongPtrW(h_wnd: *mut c_void, n_index: i32) -> isize {
+    GetWindowLongW(h_wnd, n_index)
 }
 
 #[link(name = "gdi32")]
@@ -294,6 +314,7 @@ extern "system" {
     fn SetBkMode(hdc: *mut c_void, mode: i32) -> i32;
     fn SetTextColor(hdc: *mut c_void, color: u32) -> u32;
     fn GdiFlush() -> i32;
+    fn GetDeviceCaps(hdc: *mut c_void, index: i32) -> i32;
 }
 
 #[link(name = "shell32")]
@@ -308,7 +329,7 @@ extern "system" {
     ) -> isize;
 }
 
-// Dynamic Win10/11 DPI + DWM Dark Mode helpers (zero extra .lib requirements)
+// Dynamic Win7–Win11 DPI + DWM Dark Mode helpers (zero extra .lib requirements)
 unsafe fn enable_per_monitor_dpi_v2() {
     let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
     if !u32_mod.is_null() {
@@ -316,25 +337,54 @@ unsafe fn enable_per_monitor_dpi_v2() {
         let p = GetProcAddress(u32_mod, b"SetProcessDpiAwarenessContext\0".as_ptr());
         if !p.is_null() {
             let f: SetDpiCtxFn = std::mem::transmute(p);
-            let _ = f(-4isize);
+            if f(-4isize) != 0 {
+                return;
+            }
+        }
+    }
+    let shcore = LoadLibraryW(wide_z("shcore.dll").as_ptr());
+    if !shcore.is_null() {
+        type SetDpiAwarenessFn = unsafe extern "system" fn(i32) -> i32;
+        let p = GetProcAddress(shcore, b"SetProcessDpiAwareness\0".as_ptr());
+        if !p.is_null() {
+            let f: SetDpiAwarenessFn = std::mem::transmute(p);
+            if f(2) == 0 {
+                return;
+            }
+        }
+    }
+    if !u32_mod.is_null() {
+        type SetDpiAwareFn = unsafe extern "system" fn() -> i32;
+        let p = GetProcAddress(u32_mod, b"SetProcessDPIAware\0".as_ptr());
+        if !p.is_null() {
+            let f: SetDpiAwareFn = std::mem::transmute(p);
+            let _ = f();
         }
     }
 }
 
 unsafe fn window_dpi(hwnd: *mut c_void) -> u32 {
-    if hwnd.is_null() {
-        return 96;
-    }
-    let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
-    if !u32_mod.is_null() {
-        type GetDpiFn = unsafe extern "system" fn(*mut c_void) -> u32;
-        let p = GetProcAddress(u32_mod, b"GetDpiForWindow\0".as_ptr());
-        if !p.is_null() {
-            let f: GetDpiFn = std::mem::transmute(p);
-            let dpi = f(hwnd);
-            if dpi >= 96 {
-                return dpi;
+    if !hwnd.is_null() {
+        let u32_mod = LoadLibraryW(wide_z("user32.dll").as_ptr());
+        if !u32_mod.is_null() {
+            type GetDpiFn = unsafe extern "system" fn(*mut c_void) -> u32;
+            let p = GetProcAddress(u32_mod, b"GetDpiForWindow\0".as_ptr());
+            if !p.is_null() {
+                let f: GetDpiFn = std::mem::transmute(p);
+                let dpi = f(hwnd);
+                if dpi >= 96 {
+                    return dpi;
+                }
             }
+        }
+    }
+    // Windows 7 / 8 / 8.1 fallback via GDI LOGPIXELSX (88)
+    let hdc = GetDC(hwnd);
+    if !hdc.is_null() {
+        let dpi = GetDeviceCaps(hdc, 88);
+        ReleaseDC(hwnd, hdc);
+        if dpi >= 96 {
+            return dpi as u32;
         }
     }
     96
@@ -367,10 +417,14 @@ unsafe fn apply_dwm_dark_chrome(hwnd: *mut c_void) -> bool {
     }
     let set_attr: DwmSetAttrFn = std::mem::transmute(proc);
     let dark: i32 = 1;
-    let r1 = set_attr(hwnd, 20, &dark as *const i32 as *const c_void, 4);
-    let round: i32 = 2; // DWMWCP_ROUND
+    // Try Win10 20H1+/Win11 attribute 20, then Win10 1809–1909 attribute 19 (Win7/8 ignore cleanly).
+    let mut r1 = set_attr(hwnd, 20, &dark as *const i32 as *const c_void, 4);
+    if r1 != 0 {
+        r1 = set_attr(hwnd, 19, &dark as *const i32 as *const c_void, 4);
+    }
+    let round: i32 = 2; // DWMWCP_ROUND (Win11)
     let _ = set_attr(hwnd, 33, &round as *const i32 as *const c_void, 4);
-    let border: u32 = 0x003D_312B; // COLORREF BGR for #2B313D
+    let border: u32 = 0x003D_312B; // COLORREF BGR for #2B313D (Win11)
     let _ = set_attr(hwnd, 34, &border as *const u32 as *const c_void, 4);
     r1 == 0
 }
@@ -2510,6 +2564,13 @@ mod tests {
             assert_eq!(std::mem::size_of::<PaintStruct>(), 72);
             assert_eq!(std::mem::size_of::<BitmapInfoHeader>(), 40);
         }
+        #[cfg(target_pointer_width = "32")]
+        {
+            assert_eq!(std::mem::size_of::<TrackMouseEvent>(), 16);
+            assert_eq!(std::mem::size_of::<MonitorInfo>(), 40);
+            assert_eq!(std::mem::size_of::<PaintStruct>(), 64);
+            assert_eq!(std::mem::size_of::<BitmapInfoHeader>(), 40);
+        }
     }
 
     #[test]
@@ -2528,5 +2589,7 @@ mod tests {
         assert_eq!(machine, 0x8664);
         #[cfg(target_arch = "aarch64")]
         assert_eq!(machine, 0xAA64);
+        #[cfg(target_arch = "x86")]
+        assert_eq!(machine, 0x014C);
     }
 }

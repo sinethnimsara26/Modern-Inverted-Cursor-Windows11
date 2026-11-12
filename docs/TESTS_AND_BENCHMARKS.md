@@ -90,3 +90,23 @@ Observed live via `Get-Process` on Windows 11:
 | Immediately after startup & cursor apply (`V6`) | **`471 KB – 545 KB`** (`471,040`–`544,768` bytes) | **`~1.45 MB`** (`1,515,520` bytes) | `0.062s`–`0.078s` |
 | Idle background running (30+ minutes, `PID 12984`) | **`~2.29 MB`** (`2,404,352` bytes) | **`~1.37 MB`** (`1,433,600` bytes) | **`0.078s`** (`0.00%` idle CPU) |
 | Legacy V5.1 Console Guardian (for comparison) | `7,528,448` bytes (~7.18 MB) + Windows Terminal host | — | Opens full Terminal tab |
+
+---
+
+## 7. `v1.0.2` Multi-Target & Legacy Windows 7–10 Build, PE Audit & Sandbox Verification
+
+Verified all three local targets (`x64` on Rust `1.99.0`, `win7-win10-x64` on Rust `1.75.0 +crt-static`, `win7-win10-x86` 32-bit on Rust `1.75.0 +crt-static`):
+
+| Artifact | Target / Toolchain | PE Machine / OS / Subsys | Size (bytes) | Unit Tests | `--smoke-ui` | `--sandbox` Cold Install |
+| :--- | :--- | :--- | ---: | :--- | :--- | :--- |
+| `ModernInvertedSetup-v1.0.2-x64.exe` | `x86_64` / stable `1.99.0` | `8664` / `6.00` / `2 (GUI)` | `624,128` | `9 passed` (`6+1+2`) | `PASS` (`775x675`, 3 BMPs) | `4041 ms` (`32/32`, `286,720 B` guardian) |
+| `ModernInvertedCursorGuardian-x64.exe` | `x86_64` / stable `1.99.0` | `8664` / `6.00` / `2 (GUI)` | `286,720` | — | — | — |
+| `ModernInvertedSetup-v1.0.2-win7-win10-x64.exe` | `x86_64` / `1.75.0` `+crt-static` | `8664` / `6.00` / `2 (GUI)` | `847,360` | `9 passed` (`6+1+2`) | `PASS` (`775x675`, 3 BMPs) | `1283 ms` (`32/32` via WinHTTP, `397,824 B` guardian) |
+| `ModernInvertedCursorGuardian-win7-win10-x64.exe` | `x86_64` / `1.75.0` `+crt-static` | `8664` / `6.00` / `2 (GUI)` | `397,824` | — | — | — |
+| `ModernInvertedSetup-v1.0.2-win7-win10-x86.exe` | `i686` / `1.75.0` `+crt-static` | `14C` / `6.00` / `2 (GUI)` | `751,104` | `9 passed` (`6+1+2`) | `PASS` (`775x675`, 3 BMPs) | `4561 ms` (`32/32` via WinHTTP, `352,256 B` guardian) |
+| `ModernInvertedCursorGuardian-win7-win10-x86.exe` | `i686` / `1.75.0` `+crt-static` | `14C` / `6.00` / `2 (GUI)` | `352,256` | — | — | — |
+
+### `dumpbin /IMPORTS` Static Dependency Comparison
+- **Modern `x64` (`1.99.0`):** imports `VCRUNTIME140.dll`, `api-ms-win-core-synch-l1-2-0.dll`, `api-ms-win-crt-*.dll`, `ADVAPI32.dll`, `GDI32.dll`, `KERNEL32.dll`, `ntdll.dll`, `SHELL32.dll`, `USER32.dll`.
+- **Legacy `win7-win10-x64` & `win7-win10-x86` (`1.75.0 +crt-static`):** imports **only** built-in OS DLLs present since Windows 7 SP1 (`ADVAPI32.dll`, `bcrypt.dll` [`BCryptGenRandom`], `GDI32.dll`, `KERNEL32.dll`, `ntdll.dll`, `SHELL32.dll`, `USER32.dll`) — zero `VCRUNTIME140.dll`, zero `api-ms-win-crt-*`, and zero `api-ms-win-core-synch-l1-2-0.dll` (`WaitOnAddress`).
+- **32-bit Installer Heuristic Check:** Verified that compiling `i686` `ModernInvertedSetup` with the embedded `asInvoker` + Win7–Win11 `supportedOS` manifest eliminates Windows' 32-bit Installer Detection UAC error (`os error 740`).

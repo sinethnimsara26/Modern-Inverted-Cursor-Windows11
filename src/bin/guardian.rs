@@ -3,11 +3,11 @@
 use modern_inverted_cursor::{
     app_paths, balanced_cursor_size, close_existing_v6_window, create_split_cursor_hicon,
     current_accessibility_step, ensure_all_assets, is_startup_enabled, load_saved_preset,
-    parse_preset_arg, reg_delete_value, reg_open_notify, register_and_apply, restore_backup,
-    save_preset, schedule_self_delete, set_startup_enabled, trim_working_set,
+    parse_preset_arg, reg_delete_value, reg_get_string, reg_open_notify, register_and_apply,
+    restore_backup, save_preset, schedule_self_delete, set_startup_enabled, trim_working_set,
     unregister_uninstall_entry, wide_z, BoundedLogger, Preset, RegCloseKey,
     RegNotifyChangeKeyValue, ACCESSIBILITY_STEPS, ACCESSIBILITY_SUBKEY, APP_VERSION,
-    CONFIG_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
+    CONFIG_SUBKEY, CURSORS_SUBKEY, GUARDIAN_EXE_NAME, GUARDIAN_RUN_VALUE, PACK_VERSION, RUN_SUBKEY,
     TRAY_WND_CLASS,
 };
 
@@ -26,10 +26,12 @@ const WM_DESTROY: u32 = 0x0002;
 const WM_CLOSE: u32 = 0x0010;
 const WM_QUIT: u32 = 0x0012;
 const WM_ENDSESSION: u32 = 0x0016;
+const WM_SETTINGCHANGE: u32 = 0x001A;
 const WM_DISPLAYCHANGE: u32 = 0x007E;
 const WM_TIMER: u32 = 0x0113;
 const WM_POWERBROADCAST: u32 = 0x0218;
 const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
+const WM_THEMECHANGED: u32 = 0x031A;
 const WM_LBUTTONUP: u32 = 0x0202;
 const WM_LBUTTONDBLCLK: u32 = 0x0203;
 const WM_RBUTTONUP: u32 = 0x0205;
@@ -219,8 +221,14 @@ extern "system" {
         lp_timer_func: *mut c_void,
     ) -> usize;
     fn KillTimer(h_wnd: *mut c_void, u_id_event: usize) -> i32;
+    #[cfg(target_pointer_width = "64")]
     fn SetWindowLongPtrW(h_wnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize;
+    #[cfg(target_pointer_width = "64")]
     fn GetWindowLongPtrW(h_wnd: *mut c_void, n_index: i32) -> isize;
+    #[cfg(target_pointer_width = "32")]
+    fn SetWindowLongW(h_wnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize;
+    #[cfg(target_pointer_width = "32")]
+    fn GetWindowLongW(h_wnd: *mut c_void, n_index: i32) -> isize;
     fn SetForegroundWindow(h_wnd: *mut c_void) -> i32;
     fn GetCursorPos(lp_point: *mut Point) -> i32;
     fn CreatePopupMenu() -> *mut c_void;
@@ -246,6 +254,20 @@ extern "system" {
         lp_caption: *const u16,
         u_type: u32,
     ) -> i32;
+}
+
+#[cfg(target_pointer_width = "32")]
+#[allow(non_snake_case)]
+#[inline]
+unsafe fn SetWindowLongPtrW(h_wnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize {
+    SetWindowLongW(h_wnd, n_index, dw_new_long)
+}
+
+#[cfg(target_pointer_width = "32")]
+#[allow(non_snake_case)]
+#[inline]
+unsafe fn GetWindowLongPtrW(h_wnd: *mut c_void, n_index: i32) -> isize {
+    GetWindowLongW(h_wnd, n_index)
 }
 
 #[link(name = "shell32")]
@@ -694,6 +716,14 @@ unsafe extern "system" fn wnd_proc(
                 }
                 return 0;
             }
+            WM_SETTINGCHANGE | WM_THEMECHANGED => {
+                if !(*ptr).paused {
+                    let arrow_now = reg_get_string(CURSORS_SUBKEY, Some("Arrow")).unwrap_or_default();
+                    if !arrow_now.contains("ModernInvertedCursors") {
+                        SetTimer(hwnd, TIMER_REAPPLY, DEBOUNCE_MS, null_mut());
+                    }
+                }
+            }
             WM_POWERBROADCAST
                 if w_param == PBT_APMRESUMEAUTOMATIC || w_param == PBT_APMRESUMESUSPEND =>
             {
@@ -988,6 +1018,11 @@ mod tests {
         {
             assert_eq!(std::mem::size_of::<NotifyIconDataW>(), 976);
             assert_eq!(std::mem::size_of::<Msg>(), 48);
+        }
+        #[cfg(target_pointer_width = "32")]
+        {
+            assert_eq!(std::mem::size_of::<NotifyIconDataW>(), 956);
+            assert_eq!(std::mem::size_of::<Msg>(), 28);
         }
     }
 }

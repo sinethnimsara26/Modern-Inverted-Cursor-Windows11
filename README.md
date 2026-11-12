@@ -1,10 +1,10 @@
-# Modern Inverted Cursors — Windows 11 Setup & Tray Guardian (`v1.0.x`)
+# Modern Inverted Cursors — Windows 7–11 Setup & Tray Guardian (`v1.0.x`)
 
-A lightweight, **pure-Rust (zero external crates)**, **100% FOSS (MIT Licensed)** Windows 10/11 installer and background system-tray guardian for **[Modern Inverted Mouse Cursors v3.6.2](https://github.com/emvaized/modern_inverted_mouse_cursors)** — preserving true dynamic XOR pixel inversion with balanced pointer sizing and **zero console/terminal windows**.
+A lightweight, **pure-Rust (zero external crates)**, **100% FOSS (MIT Licensed)** Windows **7 / 8 / 8.1 / 10 / 11** installer and background system-tray guardian for **[Modern Inverted Mouse Cursors v3.6.2](https://github.com/emvaized/modern_inverted_mouse_cursors)** — preserving true dynamic XOR pixel inversion with balanced pointer sizing and **zero console/terminal windows**.
 
 > **FOSS & Community Contributions Welcome:** Everything here is **100% Free and Open Source Software (MIT License)**. Anyone is completely free to use, tweak, fork, or build their own version! If you spot any bugs, Windows quirks, or improvements, please flag them anytime in **[GitHub Issues](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues)** or open a Pull Request.
 >
-> **Release Series:** `v1.0.0` (x64) and `v1.0.1` (x64 + native ARM64) make up the **initial first release (`v1.0.x`)**. Future updates may follow as we discover new bugs, edge cases, or Windows updates.
+> **Release Series:** `v1.0.0` (x64), `v1.0.1` (x64 + native ARM64), and `v1.0.2` (adding **Legacy Windows 7 SP1 / 8 / 8.1 / 10** `x64` & 32-bit `x86` builds) make up our **initial first release series (`v1.0.x`)**. Future updates may follow as we discover new bugs, edge cases, or Windows updates.
 
 | Setup Screen | Installing Screen | Done Screen |
 | :---: | :---: | :---: |
@@ -27,11 +27,13 @@ This project solves all three cleanly in **pure Rust + Win32 APIs** (`std` only,
 
 ---
 
-## Quick Install (Any New Windows 10/11 PC — x64 & ARM64)
+## Quick Install (Windows 7 SP1 through Windows 11 — x64, ARM64 & Legacy x86)
 
-1. Download the installer for your PC from **[GitHub Releases](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/latest)**:
-   - **x64 (Intel / AMD PCs):** `ModernInvertedSetup-v1.0.1-x64.exe`
-   - **ARM64 (Snapdragon / Windows on ARM PCs):** `ModernInvertedSetup-v1.0.1-arm64.exe` *(built & tested natively on GitHub's hosted `windows-11-arm` runner)*
+1. Download the installer matching your Windows version and CPU from **[GitHub Releases](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/latest)**:
+   - **Modern Windows 10 / 11 (x64 Intel/AMD):** `ModernInvertedSetup-v1.0.2-x64.exe`
+   - **Modern Windows 11 (ARM64 Snapdragon / Windows on ARM):** `ModernInvertedSetup-v1.0.2-arm64.exe` *(built & tested natively on GitHub's hosted `windows-11-arm` runner)*
+   - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (x64):** `ModernInvertedSetup-v1.0.2-win7-win10-x64.exe` *(compiled with Rust `1.75.0` + `+crt-static` + native WinHTTP TLS 1.2 — zero VC++ Redistributable or `curl.exe` required)*
+   - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (32-bit x86):** `ModernInvertedSetup-v1.0.2-win7-win10-x86.exe`
 2. Double-click the downloaded `.exe` (no admin rights or terminal required).
 3. Choose a preset (**Compact** recommended), keep the startup & Installed Apps toggles enabled, and click **Quick Install**.
 4. Your cursors switch immediately and the guardian settles into **Show hidden icons (`^`)** on the taskbar.
@@ -113,16 +115,18 @@ Both executables support unattended CLI options without opening any window:
 ```text
 .
 ├── Cargo.toml                  # Zero external crates ([dependencies] empty)
-├── build.rs                    # Resolves target-matched guardian binary (x64 or arm64)
-├── build.ps1                   # Build guardian -> setup -> cargo test -> SHA256SUMS
+├── build.rs                    # Resolves target-matched guardian binary (x64, arm64, legacy x86) + asInvoker manifest
+├── build.ps1                   # Build guardian -> setup -> cargo test -> SHA256SUMS (supports -Toolchain/-Target/-StaticCrt)
 ├── src/
-│   ├── lib.rs                  # Shared Win32 registry, SHA-1, cursor engine & SDF vector glyph renderer
+│   ├── lib.rs                  # Shared Win32 registry, WinHTTP/curl, SHA-1, cursor engine & SDF renderer
 │   └── bin/
 │       ├── guardian.rs         # #![windows_subsystem = "windows"] tray daemon
 │       └── setup.rs            # Dark-Mode Win32 GUI installer (embeds target guardian EXE)
 ├── dist/
-│   ├── ModernInvertedSetup-v1.0.1-x64.exe
-│   ├── ModernInvertedCursorGuardian.exe
+│   ├── ModernInvertedSetup-v1.0.2-x64.exe
+│   ├── ModernInvertedSetup-v1.0.2-win7-win10-x64.exe
+│   ├── ModernInvertedSetup-v1.0.2-win7-win10-x86.exe
+│   ├── ModernInvertedCursorGuardian*.exe
 │   └── SHA256SUMS.txt          # Note: ARM64 binaries are built & published on GitHub Releases via windows-11-arm
 ├── docs/
 │   ├── ARCHITECTURE.md

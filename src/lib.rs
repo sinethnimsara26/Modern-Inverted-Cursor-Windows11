@@ -243,6 +243,7 @@ extern "system" {
     fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> *mut c_void;
     fn PostMessageW(h_wnd: *mut c_void, msg: u32, w_param: usize, l_param: isize) -> i32;
     fn CreateIconIndirect(piconinfo: *const IconInfo) -> *mut c_void;
+    fn GetSystemMetrics(n_index: i32) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -275,6 +276,8 @@ extern "system" {
         dw_maximum_working_set_size: usize,
     ) -> i32;
     fn GetLocalTime(lp_system_time: *mut SystemTimeWin);
+    fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
+    fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
 }
 
 #[link(name = "advapi32")]
@@ -737,6 +740,13 @@ pub fn current_accessibility_step() -> u32 {
         let rounded_step = ((base.saturating_sub(32) + 8) / 16) + 1;
         return rounded_step.clamp(1, ACCESSIBILITY_STEPS);
     }
+    // Windows 7 / 8 / 8.1 do not populate Windows 10/11 Accessibility\CursorSize.
+    let metric = unsafe { GetSystemMetrics(13) }; // SM_CXCURSOR
+    if metric > 32 {
+        let px = (metric as u32).clamp(32, 256);
+        let rounded_step = ((px.saturating_sub(32) + 8) / 16) + 1;
+        return rounded_step.clamp(1, ACCESSIBILITY_STEPS);
+    }
     1
 }
 
@@ -852,6 +862,190 @@ pub fn assets_quick_ok(dir: &Path) -> bool {
     })
 }
 
+pub fn parse_https_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("https://")?;
+    let slash = rest.find('/')?;
+    let host = &rest[..slash];
+    let path = &rest[slash..];
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some((host, path))
+}
+
+fn winhttp_download_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let (host, path) = parse_https_url(url)
+        .ok_or_else(|| format!("Unsupported URL for WinHTTP: {url}"))?;
+
+    type WinHttpOpenFn =
+        unsafe extern "system" fn(*const u16, u32, *const u16, *const u16, u32) -> *mut c_void;
+    type WinHttpSetOptionFn =
+        unsafe extern "system" fn(*mut c_void, u32, *const c_void, u32) -> i32;
+    type WinHttpConnectFn =
+        unsafe extern "system" fn(*mut c_void, *const u16, u16, u32) -> *mut c_void;
+    type WinHttpOpenRequestFn = unsafe extern "system" fn(
+        *mut c_void,
+        *const u16,
+        *const u16,
+        *const u16,
+        *const u16,
+        *const *const u16,
+        u32,
+    ) -> *mut c_void;
+    type WinHttpSendRequestFn = unsafe extern "system" fn(
+        *mut c_void,
+        *const u16,
+        u32,
+        *mut c_void,
+        u32,
+        u32,
+        usize,
+    ) -> i32;
+    type WinHttpReceiveResponseFn = unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32;
+    type WinHttpQueryHeadersFn = unsafe extern "system" fn(
+        *mut c_void,
+        u32,
+        *const u16,
+        *mut c_void,
+        *mut u32,
+        *mut u32,
+    ) -> i32;
+    type WinHttpReadDataFn =
+        unsafe extern "system" fn(*mut c_void, *mut u8, u32, *mut u32) -> i32;
+    type WinHttpCloseFn = unsafe extern "system" fn(*mut c_void) -> i32;
+
+    struct SafeWinHttpHandle {
+        handle: *mut c_void,
+        close_fn: WinHttpCloseFn,
+    }
+    impl Drop for SafeWinHttpHandle {
+        fn drop(&mut self) {
+            if !self.handle.is_null() {
+                unsafe {
+                    (self.close_fn)(self.handle);
+                }
+            }
+        }
+    }
+
+    unsafe {
+        let dll = LoadLibraryW(wide_z("winhttp.dll").as_ptr());
+        if dll.is_null() {
+            return Err("Could not load winhttp.dll".into());
+        }
+        macro_rules! load_proc {
+            ($name:expr, $ty:ty) => {{
+                let p = GetProcAddress(dll, $name.as_ptr());
+                if p.is_null() {
+                    return Err(format!(
+                        "Missing WinHTTP export {}",
+                        String::from_utf8_lossy($name).trim_end_matches('\0')
+                    ));
+                }
+                std::mem::transmute::<*mut c_void, $ty>(p)
+            }};
+        }
+
+        let open_fn = load_proc!(b"WinHttpOpen\0", WinHttpOpenFn);
+        let set_opt_fn = load_proc!(b"WinHttpSetOption\0", WinHttpSetOptionFn);
+        let connect_fn = load_proc!(b"WinHttpConnect\0", WinHttpConnectFn);
+        let open_req_fn = load_proc!(b"WinHttpOpenRequest\0", WinHttpOpenRequestFn);
+        let send_req_fn = load_proc!(b"WinHttpSendRequest\0", WinHttpSendRequestFn);
+        let recv_resp_fn = load_proc!(b"WinHttpReceiveResponse\0", WinHttpReceiveResponseFn);
+        let query_hdrs_fn = load_proc!(b"WinHttpQueryHeaders\0", WinHttpQueryHeadersFn);
+        let read_data_fn = load_proc!(b"WinHttpReadData\0", WinHttpReadDataFn);
+        let close_fn = load_proc!(b"WinHttpCloseHandle\0", WinHttpCloseFn);
+
+        let agent = wide_z("ModernInvertedCursors/1.0");
+        // Try Win8.1+ automatic proxy first, then Win7/8 default proxy.
+        let mut h_session = open_fn(agent.as_ptr(), 4, std::ptr::null(), std::ptr::null(), 0);
+        if h_session.is_null() {
+            h_session = open_fn(agent.as_ptr(), 0, std::ptr::null(), std::ptr::null(), 0);
+        }
+        if h_session.is_null() {
+            return Err(format!("WinHttpOpen failed (err={})", GetLastError()));
+        }
+        let session = SafeWinHttpHandle { handle: h_session, close_fn };
+
+        // Enable TLS 1.2 + 1.3 (fallback to TLS 1.2 alone on Windows 7/8).
+        let tls_12_13: u32 = 0x0000_0800 | 0x0000_2000;
+        if set_opt_fn(
+            session.handle,
+            84, // WINHTTP_OPTION_SECURE_PROTOCOLS
+            &tls_12_13 as *const u32 as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+        ) == 0
+        {
+            let tls_12: u32 = 0x0000_0800;
+            let _ = set_opt_fn(
+                session.handle,
+                84,
+                &tls_12 as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            );
+        }
+
+        let host_w = wide_z(host);
+        let h_connect = connect_fn(session.handle, host_w.as_ptr(), 443, 0);
+        if h_connect.is_null() {
+            return Err(format!("WinHttpConnect failed (err={})", GetLastError()));
+        }
+        let connect = SafeWinHttpHandle { handle: h_connect, close_fn };
+
+        let verb_w = wide_z("GET");
+        let path_w = wide_z(path);
+        let h_req = open_req_fn(
+            connect.handle,
+            verb_w.as_ptr(),
+            path_w.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0x0080_0000, // WINHTTP_FLAG_SECURE
+        );
+        if h_req.is_null() {
+            return Err(format!("WinHttpOpenRequest failed (err={})", GetLastError()));
+        }
+        let req = SafeWinHttpHandle { handle: h_req, close_fn };
+
+        if send_req_fn(req.handle, std::ptr::null(), 0, std::ptr::null_mut(), 0, 0, 0) == 0 {
+            return Err(format!("WinHttpSendRequest failed (err={})", GetLastError()));
+        }
+        if recv_resp_fn(req.handle, std::ptr::null_mut()) == 0 {
+            return Err(format!("WinHttpReceiveResponse failed (err={})", GetLastError()));
+        }
+
+        let mut status: u32 = 0;
+        let mut status_len: u32 = std::mem::size_of::<u32>() as u32;
+        if query_hdrs_fn(
+            req.handle,
+            19 | 0x2000_0000, // WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER
+            std::ptr::null(),
+            &mut status as *mut u32 as *mut c_void,
+            &mut status_len,
+            std::ptr::null_mut(),
+        ) != 0
+            && status >= 400
+        {
+            return Err(format!("HTTP status {status}"));
+        }
+
+        let mut out = Vec::with_capacity(8192);
+        let mut buf = [0u8; 8192];
+        loop {
+            let mut read: u32 = 0;
+            if read_data_fn(req.handle, buf.as_mut_ptr(), buf.len() as u32, &mut read) == 0 {
+                return Err(format!("WinHttpReadData failed (err={})", GetLastError()));
+            }
+            if read == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..read as usize]);
+        }
+        Ok(out)
+    }
+}
+
 pub fn download_asset(asset: Asset, dir: &Path, log: Option<&BoundedLogger>) -> Result<(), String> {
     let final_path = dir.join(asset.name);
     if final_path.exists() {
@@ -868,34 +1062,65 @@ pub fn download_asset(asset: Asset, dir: &Path, log: Option<&BoundedLogger>) -> 
     let _ = fs::remove_file(&temp_path);
     let url = format!("{REPO_RAW}/{}", asset.name);
 
-    let status = Command::new("curl.exe")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args([
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--retry",
-            "4",
-            "--retry-delay",
-            "1",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "90",
-            "--output",
-        ])
-        .arg(&temp_path)
-        .arg(&url)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("Could not launch curl.exe: {e}"))?;
-
-    if !status.success() {
-        let _ = fs::remove_file(&temp_path);
-        return Err(format!("Download failed for {} ({url}).", asset.name));
+    // Native WinHTTP works on Windows 7 SP1 through Windows 11 without external curl.exe.
+    let mut winhttp_ok = false;
+    let mut winhttp_err = String::new();
+    for attempt in 0..3 {
+        match winhttp_download_bytes(&url) {
+            Ok(bytes) => {
+                fs::write(&temp_path, &bytes)
+                    .map_err(|e| format!("Could not write {}: {e}", temp_path.display()))?;
+                winhttp_ok = true;
+                break;
+            }
+            Err(e) => {
+                winhttp_err = e;
+                if attempt < 2 {
+                    thread::sleep(Duration::from_millis(350));
+                }
+            }
+        }
     }
+
+    if !winhttp_ok {
+        let status = Command::new("curl.exe")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args([
+                "--fail",
+                "--location",
+                "--silent",
+                "--show-error",
+                "--retry",
+                "4",
+                "--retry-delay",
+                "1",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "90",
+                "--output",
+            ])
+            .arg(&temp_path)
+            .arg(&url)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| {
+                format!(
+                    "Download failed for {} via WinHTTP ({winhttp_err}) and curl.exe fallback ({e})",
+                    asset.name
+                )
+            })?;
+
+        if !status.success() {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!(
+                "Download failed for {} ({url}): WinHTTP: {winhttp_err}",
+                asset.name
+            ));
+        }
+    }
+
     if let Err(e) = verify_asset_file(asset, &temp_path) {
         let _ = fs::remove_file(&temp_path);
         return Err(format!("Integrity check failed for {}: {e}", asset.name));
@@ -1121,10 +1346,17 @@ pub fn register_and_apply(
     let step = current_accessibility_step();
     let px = balanced_cursor_size(step);
     for (label, path, id) in live {
-        if !path.exists() && (id == 32671 || id == 32672) {
+        // Optional extended cursor slots (Pen 32631, Location 32671, Person 32672)
+        // may be absent on Windows 7 / 8 / 8.1 or early Windows 10 builds.
+        let optional = id == 32631 || id == 32671 || id == 32672;
+        if !path.exists() && optional {
             continue;
         }
-        load_and_set_system_cursor(&path, id, label, px)?;
+        if let Err(err) = load_and_set_system_cursor(&path, id, label, px) {
+            if !optional {
+                return Err(err);
+            }
+        }
     }
 
     if let Some(l) = log {
@@ -1587,5 +1819,18 @@ mod tests {
         unsafe {
             DestroyCursor(icon);
         }
+    }
+
+    #[test]
+    fn test_parse_https_url_extracts_host_and_path() {
+        assert_eq!(
+            parse_https_url("https://raw.githubusercontent.com/emvaized/modern_inverted_mouse_cursors/3.6.2/src/arrow.cur"),
+            Some((
+                "raw.githubusercontent.com",
+                "/emvaized/modern_inverted_mouse_cursors/3.6.2/src/arrow.cur"
+            ))
+        );
+        assert_eq!(parse_https_url("http://example.com/a"), None);
+        assert_eq!(parse_https_url("https://example.com"), None);
     }
 }

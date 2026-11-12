@@ -1,8 +1,8 @@
 [package]
 name = "modern-inverted-cursor"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
-description = "Pure-Rust Windows 11 Dark Mode installer and ultra-lightweight system-tray guardian for Modern Inverted Mouse Cursors v3.6.2 (x64 & ARM64)"
+description = "Pure-Rust Windows 7–11 Dark Mode installer and ultra-lightweight system-tray guardian for Modern Inverted Mouse Cursors v3.6.2 (x64, ARM64, and Legacy Win7–Win10 x64/x86)"
 license = "MIT"
 
 [lib]

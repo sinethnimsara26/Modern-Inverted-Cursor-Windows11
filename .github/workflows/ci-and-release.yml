@@ -13,72 +13,133 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build & Test (${{ matrix.arch }})
+    name: Build & Test (${{ matrix.suffix }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x64
+            suffix: x64
             runner: windows-latest
+            toolchain: stable
+            target: x86_64-pc-windows-msvc
+            static_crt: false
             expected_machine: "0x8664"
           - arch: arm64
+            suffix: arm64
             runner: windows-11-arm
+            toolchain: stable
+            target: aarch64-pc-windows-msvc
+            static_crt: false
             expected_machine: "0xAA64"
+          - arch: x64
+            suffix: win7-win10-x64
+            runner: windows-latest
+            toolchain: "1.75.0"
+            target: x86_64-pc-windows-msvc
+            static_crt: true
+            expected_machine: "0x8664"
+          - arch: x86
+            suffix: win7-win10-x86
+            runner: windows-latest
+            toolchain: "1.75.0"
+            target: i686-pc-windows-msvc
+            static_crt: true
+            expected_machine: "0x014C"
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain (${{ matrix.toolchain }} / ${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: ${{ matrix.target }}
 
-      - name: Build release binaries and run unit tests (${{ matrix.arch }})
+      - name: Build release binaries and run unit tests (${{ matrix.suffix }})
         shell: pwsh
         run: |
-          ./build.ps1 -Arch ${{ matrix.arch }}
+          $argsList = @(
+            "-Arch", "${{ matrix.arch }}",
+            "-Suffix", "${{ matrix.suffix }}",
+            "-Toolchain", "${{ matrix.toolchain }}",
+            "-Target", "${{ matrix.target }}"
+          )
+          if ("${{ matrix.static_crt }}" -eq "true") {
+            $argsList += "-StaticCrt"
+          }
+          & ./build.ps1 @argsList
 
       - name: Verify PE architecture (${{ matrix.expected_machine }}) & GUI subsystem
         shell: pwsh
         run: |
-          $exes = Get-ChildItem dist -Filter "*-${{ matrix.arch }}.exe"
-          if ($exes.Count -lt 2) { throw "Expected both guardian and setup EXEs for ${{ matrix.arch }}" }
+          $setupExe = Get-ChildItem dist -Filter "ModernInvertedSetup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1
+          $guardExe = Get-Item "dist\ModernInvertedCursorGuardian-${{ matrix.suffix }}.exe"
+          $exes = @($setupExe, $guardExe)
           foreach ($f in $exes) {
+            if ($null -eq $f) { throw "Missing expected EXE for ${{ matrix.suffix }}" }
             $b = [System.IO.File]::ReadAllBytes($f.FullName)
             $pe = [BitConverter]::ToInt32($b, 0x3C)
             $machine = "0x{0:X4}" -f [BitConverter]::ToUInt16($b, $pe + 4)
             $subsys = [BitConverter]::ToUInt16($b, $pe + 24 + 68)
-            Write-Host "$($f.Name): Machine=$machine Subsystem=$subsys Size=$($b.Length)"
+            $osVer = "{0}.{1:D2}" -f [BitConverter]::ToUInt16($b, $pe + 24 + 40), [BitConverter]::ToUInt16($b, $pe + 24 + 42)
+            Write-Host "$($f.Name): Machine=$machine Subsystem=$subsys OS=$osVer Size=$($b.Length)"
             if ($machine -ne "${{ matrix.expected_machine }}") { throw "Machine mismatch for $($f.Name): $machine" }
             if ($subsys -ne 2) { throw "Subsystem must be 2 (Windows GUI), got $subsys" }
           }
 
-      - name: Verify Dark-Mode Setup UI smoke rendering (${{ matrix.arch }})
+      - name: Audit Legacy Win7–Win10 static DLL imports (${{ matrix.suffix }})
+        if: matrix.static_crt == true
         shell: pwsh
         run: |
-          $setupExe = Get-ChildItem dist -Filter "ModernInvertedSetup-v*-${{ matrix.arch }}.exe" | Select-Object -First 1 -ExpandProperty FullName
-          $smoke = "$env:RUNNER_TEMP\smoke_ui_${{ matrix.arch }}"
-          Start-Process -FilePath $setupExe -ArgumentList "--smoke-ui `"$smoke`"" -Wait
+          $dumpbin = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio" -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw "dumpbin.exe not found on runner" }
+          foreach ($pat in @("ModernInvertedSetup-v*-${{ matrix.suffix }}.exe", "ModernInvertedCursorGuardian-${{ matrix.suffix }}.exe")) {
+            $exe = Get-ChildItem dist -Filter $pat | Select-Object -First 1 -ExpandProperty FullName
+            $imps = & $dumpbin /IMPORTS $exe | Select-String "\.dll$" | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique
+            Write-Host "$exe imports: $($imps -join ', ')"
+            $bad = $imps | Where-Object { $_ -match "^(VCRUNTIME|api-ms-win-crt-|api-ms-win-core-synch-l1-2-0)" }
+            if ($bad) { throw "Forbidden Win8+/CRT DLL import in legacy binary: $($bad -join ', ')" }
+          }
+
+      - name: Verify Dark-Mode Setup UI smoke rendering (${{ matrix.suffix }})
+        shell: pwsh
+        run: |
+          $setupExe = Get-ChildItem dist -Filter "ModernInvertedSetup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1 -ExpandProperty FullName
+          $smoke = "$env:RUNNER_TEMP\smoke_ui_${{ matrix.suffix }}"
+          Start-Process -FilePath $setupExe -ArgumentList "--smoke-ui", $smoke -Wait
           if (!(Test-Path "$smoke\01_setup_dark.bmp")) { throw "Missing setup UI smoke screenshot" }
           if (!(Test-Path "$smoke\02_installing_dark.bmp")) { throw "Missing progress UI smoke screenshot" }
           if (!(Test-Path "$smoke\03_done_dark.bmp")) { throw "Missing done UI smoke screenshot" }
           Get-Content "$smoke\smoke-ui-report.txt"
 
-      - name: Upload ${{ matrix.arch }} binaries
+      - name: Verify Legacy WinHTTP sandbox cursor install (${{ matrix.suffix }})
+        if: matrix.static_crt == true
+        shell: pwsh
+        run: |
+          $setupExe = Get-ChildItem dist -Filter "ModernInvertedSetup-v*-${{ matrix.suffix }}.exe" | Select-Object -First 1 -ExpandProperty FullName
+          $sand = "$env:RUNNER_TEMP\sandbox_${{ matrix.suffix }}"
+          Start-Process -FilePath $setupExe -ArgumentList "--sandbox", $sand, "--preset", "compact" -Wait
+          if (!(Test-Path "$sand\sandbox-report.txt")) { throw "Missing sandbox-report.txt" }
+          Get-Content "$sand\sandbox-report.txt"
+
+      - name: Upload ${{ matrix.suffix }} binaries
         uses: actions/upload-artifact@v4
         with:
-          name: binaries-${{ matrix.arch }}
+          name: binaries-${{ matrix.suffix }}
           path: |
-            dist/ModernInvertedSetup-v*-${{ matrix.arch }}.exe
-            dist/ModernInvertedCursorGuardian-${{ matrix.arch }}.exe
+            dist/ModernInvertedSetup-v*-${{ matrix.suffix }}.exe
+            dist/ModernInvertedCursorGuardian-${{ matrix.suffix }}.exe
           if-no-files-found: error
 
   publish-release:
-    name: Publish Multi-Arch GitHub Release
+    name: Publish Multi-Arch & Legacy GitHub Release
     needs: build-windows
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - name: Download x64 & ARM64 artifacts
+      - name: Download x64, ARM64 & Legacy Win7–Win10 artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets
@@ -96,23 +157,25 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          cat <<'EOF' > release_notes.md
-          ## Modern Inverted Cursors — Windows x64 & Windows ARM64 (`v1.0.x` First Release Series)
+          cat <<EOF > release_notes.md
+          ## Modern Inverted Cursors — Windows 7–11 (x64, ARM64 & Legacy x64/x86)
 
           **100% Free and Open Source Software (FOSS • MIT License)** — everyone is welcome to use, tweak, fork, and build their own versions! If you run into any bugs, Windows quirks, or ideas, please open an [Issue](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues) or Pull Request.
 
-          > **Release Note:** This release extends our initial **`v1.0.0`** launch under the **first release series (`v1.0.x`)**, adding native **Windows 11 ARM64 (`aarch64-pc-windows-msvc`)** builds compiled and tested natively on GitHub's cloud `windows-11-arm` runner alongside **Windows x64 (`x86_64-pc-windows-msvc`)**. Future updates may follow as we discover new bugs or Windows changes.
+          > **Release Note (\`$TAG\` under the \`v1.0.x\` First Release Series):** Builds upon \`v1.0.0\` (x64) and \`v1.0.1\` (x64 + ARM64) by adding **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (x64 & 32-bit x86)** installers and tray guardians compiled with **Rust \`1.75.0\` + static CRT (\`+crt-static\`)**, native **WinHTTP TLS 1.2** downloads (no \`curl.exe\` dependency), and dynamic Vista–Win11 DPI/theme fallbacks — zero VC++ Redistributable required. Future updates may follow as we discover new bugs or edge cases.
 
           ### Downloads
-          - **Intel / AMD Windows 10 & 11 (x64):** `ModernInvertedSetup-v1.0.1-x64.exe`
-          - **Snapdragon / ARM64 Windows 11 (ARM64):** `ModernInvertedSetup-v1.0.1-arm64.exe`
-          - **Standalone Guardians:** `ModernInvertedCursorGuardian-x64.exe` & `ModernInvertedCursorGuardian-arm64.exe`
-          - **Checksums:** `SHA256SUMS.txt`
+          - **Modern Windows 10 & 11 (x64 Intel/AMD):** \`ModernInvertedSetup-$TAG-x64.exe\`
+          - **Modern Windows 11 (ARM64 Snapdragon):** \`ModernInvertedSetup-$TAG-arm64.exe\` *(built & tested natively on \`windows-11-arm\`)*
+          - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (x64):** \`ModernInvertedSetup-$TAG-win7-win10-x64.exe\`
+          - **Legacy Windows 7 SP1 / 8 / 8.1 / 10 (32-bit x86):** \`ModernInvertedSetup-$TAG-win7-win10-x86.exe\`
+          - **Standalone Guardians:** \`ModernInvertedCursorGuardian-x64.exe\`, \`ModernInvertedCursorGuardian-arm64.exe\`, \`ModernInvertedCursorGuardian-win7-win10-x64.exe\`, \`ModernInvertedCursorGuardian-win7-win10-x86.exe\`
+          - **Checksums:** \`SHA256SUMS.txt\`
           EOF
 
           if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" release-assets/* --clobber --repo "$GH_REPO"
-            gh release edit "$TAG" --repo "$GH_REPO" --title "$TAG — Windows x64 & ARM64 Dark-Mode Setup & Silent Tray Guardian" --notes-file release_notes.md
+            gh release edit "$TAG" --repo "$GH_REPO" --title "$TAG — Windows 7–11 (x64, ARM64 & Legacy) Setup & Tray Guardian" --notes-file release_notes.md
           else
-            gh release create "$TAG" release-assets/* --repo "$GH_REPO" --title "$TAG — Windows x64 & ARM64 Dark-Mode Setup & Silent Tray Guardian" --notes-file release_notes.md
+            gh release create "$TAG" release-assets/* --repo "$GH_REPO" --title "$TAG — Windows 7–11 (x64, ARM64 & Legacy) Setup & Tray Guardian" --notes-file release_notes.md
           fi
