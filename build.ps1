@@ -1,3 +1,8 @@
+param(
+    [string]$Arch = "",
+    [string]$Version = ""
+)
+
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -5,20 +10,56 @@ $TargetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-P
 $Dist = Join-Path $Root "dist"
 New-Item -ItemType Directory -Path $Dist -Force | Out-Null
 
-$GuardianOut = Join-Path $Dist "ModernInvertedCursorGuardian.exe"
-$SetupOut = Join-Path $Dist "ModernInvertedSetup-v1.0.0.exe"
+if ([string]::IsNullOrWhiteSpace($Arch)) {
+    if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+        $Arch = "arm64"
+    } else {
+        $Arch = "x64"
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $toml = Get-Content (Join-Path $Root "Cargo.toml") -Raw
+    if ($toml -match 'version\s*=\s*"([^"]+)"') {
+        $Version = $Matches[1]
+    } else {
+        $Version = "1.0.1"
+    }
+}
+
+$GuardianName = if ($Arch -eq "arm64") { "ModernInvertedCursorGuardian-arm64.exe" } else { "ModernInvertedCursorGuardian.exe" }
+$GuardianTagged = "ModernInvertedCursorGuardian-$Arch.exe"
+$SetupOut = Join-Path $Dist "ModernInvertedSetup-v$Version-$Arch.exe"
+$GuardianOut = Join-Path $Dist $GuardianName
+$GuardianArchCopy = Join-Path $Dist $GuardianTagged
 
 Push-Location $Root
 try {
-    Write-Host "[1/4] Building ModernInvertedCursorGuardian (release)..." -ForegroundColor Cyan
+    Write-Host "[1/4] Building ModernInvertedCursorGuardian ($Arch, release)..." -ForegroundColor Cyan
     cargo build --release --bin ModernInvertedCursorGuardian
     if ($LASTEXITCODE -ne 0) { throw "Guardian build failed." }
-    Copy-Item (Join-Path $TargetRoot "release\ModernInvertedCursorGuardian.exe") $GuardianOut -Force
+    $BuiltGuardian = Join-Path $TargetRoot "release\ModernInvertedCursorGuardian.exe"
+    Copy-Item $BuiltGuardian $GuardianOut -Force
+    if ($GuardianArchCopy -ne $GuardianOut) {
+        Copy-Item $BuiltGuardian $GuardianArchCopy -Force
+    }
 
-    Write-Host "[2/4] Building ModernInvertedSetup (release)..." -ForegroundColor Cyan
+    $env:GUARDIAN_EMBED_PATH = $GuardianOut
+
+    Write-Host "[2/4] Building ModernInvertedSetup v$Version ($Arch, release)..." -ForegroundColor Cyan
     cargo build --release --bin ModernInvertedSetup
     if ($LASTEXITCODE -ne 0) { throw "Setup build failed." }
     Copy-Item (Join-Path $TargetRoot "release\ModernInvertedSetup.exe") $SetupOut -Force
+
+    # Keep dist clean of superseded x64 setup filenames from earlier patch versions
+    Get-ChildItem $Dist -Filter "ModernInvertedSetup-v*-$Arch.exe" |
+        Where-Object FullName -ne $SetupOut |
+        Remove-Item -Force
+    if ($Arch -eq "x64") {
+        Get-ChildItem $Dist -Filter "ModernInvertedSetup-v*.exe" |
+            Where-Object { $_.Name -notmatch "-arm64\.exe$" -and $_.FullName -ne $SetupOut } |
+            Remove-Item -Force
+    }
 
     Write-Host "[3/4] Running unit tests..." -ForegroundColor Cyan
     cargo test
@@ -26,15 +67,15 @@ try {
 
     Write-Host "[4/4] Generating SHA256SUMS.txt..." -ForegroundColor Cyan
     Get-ChildItem $Dist -Filter "*.pdb" | Remove-Item -Force
-    $Sums = @(
-        "$((Get-FileHash $GuardianOut -Algorithm SHA256).Hash.ToLower())  ModernInvertedCursorGuardian.exe",
-        "$((Get-FileHash $SetupOut -Algorithm SHA256).Hash.ToLower())  ModernInvertedSetup-v1.0.0.exe"
-    )
+    $Sums = Get-ChildItem $Dist -Filter "*.exe" | Sort-Object Name | ForEach-Object {
+        "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+    }
     $Sums | Set-Content (Join-Path $Dist "SHA256SUMS.txt") -Encoding ascii
 
-    Write-Host "`nBuild & tests succeeded:" -ForegroundColor Green
+    Write-Host "`nBuild & tests succeeded ($Arch):" -ForegroundColor Green
     Get-Item $GuardianOut, $SetupOut | Format-List Name, Length, LastWriteTime
     Get-Content (Join-Path $Dist "SHA256SUMS.txt")
 } finally {
+    Remove-Item Env:GUARDIAN_EMBED_PATH -ErrorAction SilentlyContinue
     Pop-Location
 }

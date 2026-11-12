@@ -1,6 +1,10 @@
-# Modern Inverted Cursors — Windows 11 Setup & Tray Guardian (`v1.0.0`)
+# Modern Inverted Cursors — Windows 11 Setup & Tray Guardian (`v1.0.x`)
 
-A lightweight, **pure-Rust (zero external crates)** Windows 10/11 installer and background system-tray guardian for **[Modern Inverted Mouse Cursors v3.6.2](https://github.com/emvaized/modern_inverted_mouse_cursors)** — preserving true dynamic XOR pixel inversion with balanced pointer sizing and **zero console/terminal windows**.
+A lightweight, **pure-Rust (zero external crates)**, **100% FOSS (MIT Licensed)** Windows 10/11 installer and background system-tray guardian for **[Modern Inverted Mouse Cursors v3.6.2](https://github.com/emvaized/modern_inverted_mouse_cursors)** — preserving true dynamic XOR pixel inversion with balanced pointer sizing and **zero console/terminal windows**.
+
+> **FOSS & Community Contributions Welcome:** Everything here is **100% Free and Open Source Software (MIT License)**. Anyone is completely free to use, tweak, fork, or build their own version! If you spot any bugs, Windows quirks, or improvements, please flag them anytime in **[GitHub Issues](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues)** or open a Pull Request.
+>
+> **Release Series:** `v1.0.0` (x64) and `v1.0.1` (x64 + native ARM64) make up the **initial first release (`v1.0.x`)**. Future updates may follow as we discover new bugs, edge cases, or Windows updates.
 
 | Setup Screen | Installing Screen | Done Screen |
 | :---: | :---: | :---: |
@@ -23,10 +27,12 @@ This project solves all three cleanly in **pure Rust + Win32 APIs** (`std` only,
 
 ---
 
-## Quick Install (Any New Windows 10/11 PC)
+## Quick Install (Any New Windows 10/11 PC — x64 & ARM64)
 
-1. Download **`ModernInvertedSetup-v1.0.0.exe`** from the **[v1.0.0 GitHub Release](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/tag/v1.0.0)**.
-2. Double-click **`ModernInvertedSetup-v1.0.0.exe`** (no admin rights or terminal required).
+1. Download the installer for your PC from **[GitHub Releases](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/releases/latest)**:
+   - **x64 (Intel / AMD PCs):** `ModernInvertedSetup-v1.0.1-x64.exe`
+   - **ARM64 (Snapdragon / Windows on ARM PCs):** `ModernInvertedSetup-v1.0.1-arm64.exe` *(built & tested natively on GitHub's hosted `windows-11-arm` runner)*
+2. Double-click the downloaded `.exe` (no admin rights or terminal required).
 3. Choose a preset (**Compact** recommended), keep the startup & Installed Apps toggles enabled, and click **Quick Install**.
 4. Your cursors switch immediately and the guardian settles into **Show hidden icons (`^`)** on the taskbar.
 
@@ -101,22 +107,23 @@ Both executables support unattended CLI options without opening any window:
 
 ## Repository Structure & Branches
 
-- **`main`** — Current pure-Rust `v1.0.0` Cargo workspace, Dark-Mode Setup GUI, V6 Tray Guardian, docs, benchmarks, and release binaries.
+- **`main`** — Current pure-Rust `v1.0.x` Cargo workspace, Dark-Mode Setup GUI, V6 Tray Guardian, docs, benchmarks, and multi-arch CI workflow (`x64` + `ARM64`).
 - **`legacy-v5.1`** — Complete preserved Git history of earlier V1–V5.1 PowerShell and console-Rust iterations prior to the V6 rewrite.
 
 ```text
 .
 ├── Cargo.toml                  # Zero external crates ([dependencies] empty)
+├── build.rs                    # Resolves target-matched guardian binary (x64 or arm64)
 ├── build.ps1                   # Build guardian -> setup -> cargo test -> SHA256SUMS
 ├── src/
 │   ├── lib.rs                  # Shared Win32 registry, SHA-1, cursor engine & SDF vector glyph renderer
 │   └── bin/
 │       ├── guardian.rs         # #![windows_subsystem = "windows"] tray daemon
-│       └── setup.rs            # Dark-Mode Win32 GUI installer (embeds guardian EXE)
+│       └── setup.rs            # Dark-Mode Win32 GUI installer (embeds target guardian EXE)
 ├── dist/
-│   ├── ModernInvertedSetup-v1.0.0.exe
+│   ├── ModernInvertedSetup-v1.0.1-x64.exe
 │   ├── ModernInvertedCursorGuardian.exe
-│   └── SHA256SUMS.txt
+│   └── SHA256SUMS.txt          # Note: ARM64 binaries are built & published on GitHub Releases via windows-11-arm
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── TESTS_AND_BENCHMARKS.md
@@ -128,15 +135,17 @@ Both executables support unattended CLI options without opening any window:
 
 ---
 
-## Build from Source
+## Build from Source & Contributing (FOSS)
 
-Requires Rust (`rustc` / `cargo` on Windows; zero external crates needed):
+Requires Rust (`rustc` / `cargo` on Windows x64 or Windows ARM64; zero external crates needed):
 
 ```powershell
 git clone https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11.git
 cd Modern-Inverted-Cursor-Windows11
 .\build.ps1
 ```
+
+Everything in this project is **100% Free and Open Source Software (FOSS)**. Feel free to fork, tweak, study, or build your own custom version. Found a bug or want to suggest an improvement? Open an [Issue](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues) or submit a Pull Request!
 
 ## Upstream Attribution & License
 

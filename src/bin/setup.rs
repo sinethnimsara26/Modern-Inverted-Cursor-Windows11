@@ -22,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-const GUARDIAN_EXE_BYTES: &[u8] = include_bytes!("../../dist/ModernInvertedCursorGuardian.exe");
+const GUARDIAN_EXE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_guardian.exe"));
 const WND_CLASS: &str = "ModernInvertedDarkSetupWnd";
 
 const LOGICAL_W: i32 = 620;
@@ -2516,5 +2516,17 @@ mod tests {
     fn test_embedded_guardian_is_nonempty_pe_binary() {
         assert!(GUARDIAN_EXE_BYTES.len() > 10_000);
         assert_eq!(&GUARDIAN_EXE_BYTES[..2], b"MZ");
+        let pe_off = u32::from_le_bytes([
+            GUARDIAN_EXE_BYTES[0x3C],
+            GUARDIAN_EXE_BYTES[0x3D],
+            GUARDIAN_EXE_BYTES[0x3E],
+            GUARDIAN_EXE_BYTES[0x3F],
+        ]) as usize;
+        assert_eq!(&GUARDIAN_EXE_BYTES[pe_off..pe_off + 4], b"PE\0\0");
+        let machine = u16::from_le_bytes([GUARDIAN_EXE_BYTES[pe_off + 4], GUARDIAN_EXE_BYTES[pe_off + 5]]);
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(machine, 0x8664);
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(machine, 0xAA64);
     }
 }

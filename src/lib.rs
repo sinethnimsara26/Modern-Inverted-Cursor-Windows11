@@ -14,7 +14,7 @@ use std::{
 };
 
 pub const PACK_VERSION: &str = "3.6.2";
-pub const APP_VERSION: &str = "1.0.0";
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PUBLISHER: &str = "SN-Tech / sinethnimsara26";
 pub const REPO_RAW: &str =
     "https://raw.githubusercontent.com/emvaized/modern_inverted_mouse_cursors/3.6.2/src";

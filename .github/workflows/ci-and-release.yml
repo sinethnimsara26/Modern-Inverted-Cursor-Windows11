@@ -1,4 +1,4 @@
-name: CI & Release Build
+name: CI & Multi-Arch Release Build
 
 on:
   push:
@@ -12,8 +12,19 @@ permissions:
   contents: write
 
 jobs:
-  windows-build-and-test:
-    runs-on: windows-latest
+  build-windows:
+    name: Build & Test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            expected_machine: "0x8664"
+          - arch: arm64
+            runner: windows-11-arm
+            expected_machine: "0xAA64"
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,27 +32,86 @@ jobs:
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build release binaries and run unit tests
+      - name: Build release binaries and run unit tests (${{ matrix.arch }})
         shell: pwsh
         run: |
-          ./build.ps1
+          ./build.ps1 -Arch ${{ matrix.arch }}
 
-      - name: Verify Dark-Mode Setup UI smoke rendering
+      - name: Verify PE architecture (${{ matrix.expected_machine }}) & GUI subsystem
         shell: pwsh
         run: |
-          $smoke = "$env:RUNNER_TEMP\smoke_ui"
-          Start-Process -FilePath ".\dist\ModernInvertedSetup-v1.0.0.exe" -ArgumentList "--smoke-ui `"$smoke`"" -Wait
+          $exes = Get-ChildItem dist -Filter "*-${{ matrix.arch }}.exe"
+          if ($exes.Count -lt 2) { throw "Expected both guardian and setup EXEs for ${{ matrix.arch }}" }
+          foreach ($f in $exes) {
+            $b = [System.IO.File]::ReadAllBytes($f.FullName)
+            $pe = [BitConverter]::ToInt32($b, 0x3C)
+            $machine = "0x{0:X4}" -f [BitConverter]::ToUInt16($b, $pe + 4)
+            $subsys = [BitConverter]::ToUInt16($b, $pe + 24 + 68)
+            Write-Host "$($f.Name): Machine=$machine Subsystem=$subsys Size=$($b.Length)"
+            if ($machine -ne "${{ matrix.expected_machine }}") { throw "Machine mismatch for $($f.Name): $machine" }
+            if ($subsys -ne 2) { throw "Subsystem must be 2 (Windows GUI), got $subsys" }
+          }
+
+      - name: Verify Dark-Mode Setup UI smoke rendering (${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          $setupExe = Get-ChildItem dist -Filter "ModernInvertedSetup-v*-${{ matrix.arch }}.exe" | Select-Object -First 1 -ExpandProperty FullName
+          $smoke = "$env:RUNNER_TEMP\smoke_ui_${{ matrix.arch }}"
+          Start-Process -FilePath $setupExe -ArgumentList "--smoke-ui `"$smoke`"" -Wait
           if (!(Test-Path "$smoke\01_setup_dark.bmp")) { throw "Missing setup UI smoke screenshot" }
           if (!(Test-Path "$smoke\02_installing_dark.bmp")) { throw "Missing progress UI smoke screenshot" }
           if (!(Test-Path "$smoke\03_done_dark.bmp")) { throw "Missing done UI smoke screenshot" }
           Get-Content "$smoke\smoke-ui-report.txt"
 
-      - name: Upload Windows artifacts
+      - name: Upload ${{ matrix.arch }} binaries
         uses: actions/upload-artifact@v4
         with:
-          name: ModernInvertedCursors-Windows-x64
+          name: binaries-${{ matrix.arch }}
           path: |
-            dist/ModernInvertedSetup-v1.0.0.exe
-            dist/ModernInvertedCursorGuardian.exe
-            dist/SHA256SUMS.txt
+            dist/ModernInvertedSetup-v*-${{ matrix.arch }}.exe
+            dist/ModernInvertedCursorGuardian-${{ matrix.arch }}.exe
           if-no-files-found: error
+
+  publish-release:
+    name: Publish Multi-Arch GitHub Release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download x64 & ARM64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate combined SHA256SUMS.txt
+        run: |
+          cd release-assets
+          sha256sum *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat <<'EOF' > release_notes.md
+          ## Modern Inverted Cursors — Windows x64 & Windows ARM64 (`v1.0.x` First Release Series)
+
+          **100% Free and Open Source Software (FOSS • MIT License)** — everyone is welcome to use, tweak, fork, and build their own versions! If you run into any bugs, Windows quirks, or ideas, please open an [Issue](https://github.com/sinethnimsara26/Modern-Inverted-Cursor-Windows11/issues) or Pull Request.
+
+          > **Release Note:** This release extends our initial **`v1.0.0`** launch under the **first release series (`v1.0.x`)**, adding native **Windows 11 ARM64 (`aarch64-pc-windows-msvc`)** builds compiled and tested on GitHub's cloud `windows-11-arm` runner alongside **Windows x64 (`x86_64-pc-windows-msvc`)**. Future updates may follow as we discover new bugs or Windows changes.
+
+          ### Downloads
+          - **Intel / AMD Windows 10 & 11 (x64):** `ModernInvertedSetup-v1.0.1-x64.exe`
+          - **Snapdragon / ARM64 Windows 11 (ARM64):** `ModernInvertedSetup-v1.0.1-arm64.exe`
+          - **Standalone Guardians:** `ModernInvertedCursorGuardian-x64.exe` & `ModernInvertedCursorGuardian-arm64.exe`
+          - **Checksums:** `SHA256SUMS.txt`
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+            gh release edit "$TAG" --title "$TAG — Windows x64 & ARM64 Dark-Mode Setup & Silent Tray Guardian" --notes-file release_notes.md
+          else
+            gh release create "$TAG" release-assets/* --title "$TAG — Windows x64 & ARM64 Dark-Mode Setup & Silent Tray Guardian" --notes-file release_notes.md
+          fi
